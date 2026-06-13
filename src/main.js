@@ -194,9 +194,7 @@ let focusHoldUntil = 0;
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
-  alpha: false,
-  preserveDrawingBuffer: true,
-  powerPreference: "high-performance"
+  alpha: false
 });
 renderer.setClearColor(0x363b3d, 1);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -254,9 +252,20 @@ const unitY = new THREE.Vector3(0, 1, 0);
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const tileMeshes = new Map();
+const pieceMeshes = new Map();
 const netCellGroups = new Map();
 const tileGeometry = new THREE.PlaneGeometry(1, 1);
 const pieceGeometry = new THREE.CylinderGeometry(1, 1, 0.12, 36, 1);
+const blackPieceMaterial = new THREE.MeshStandardMaterial({
+  color: colors.blackPiece,
+  roughness: 0.58,
+  metalness: 0.08
+});
+const whitePieceMaterial = new THREE.MeshStandardMaterial({
+  color: colors.whitePiece,
+  roughness: 0.42,
+  metalness: 0.02
+});
 const locatorMarker = new THREE.Mesh(
   new THREE.RingGeometry(0.84, 1, 48),
   new THREE.MeshBasicMaterial({
@@ -273,6 +282,7 @@ scene.add(locatorMarker);
 
 buildHealpixBoundaries();
 buildTiles();
+buildPieceMeshes();
 buildNet();
 resize();
 applyLanguage();
@@ -432,29 +442,36 @@ function buildNet() {
   }
 }
 
-function buildPieces() {
+function buildPieceMeshes() {
   pieceGroup.clear();
+  pieceMeshes.clear();
 
   for (const cell of topology.cells) {
-    const value = state.board[cell.id];
-    if (value === EMPTY) {
-      continue;
-    }
-
     const normal = vectorForCell(cell);
     const radius = tileSize(cell) * 0.28;
-    const material = new THREE.MeshStandardMaterial({
-      color: value === BLACK ? colors.blackPiece : colors.whitePiece,
-      roughness: value === BLACK ? 0.58 : 0.42,
-      metalness: value === BLACK ? 0.08 : 0.02
-    });
-    const piece = new THREE.Mesh(pieceGeometry, material);
+    const piece = new THREE.Mesh(pieceGeometry, blackPieceMaterial);
 
     piece.position.copy(normal).multiplyScalar(1.068);
     piece.quaternion.setFromUnitVectors(unitY, normal);
     piece.scale.set(radius, 0.13, radius);
     piece.userData.cellId = cell.id;
+    piece.visible = false;
     pieceGroup.add(piece);
+    pieceMeshes.set(cell.id, piece);
+  }
+}
+
+function updatePieces() {
+  for (const cell of topology.cells) {
+    const piece = pieceMeshes.get(cell.id);
+    const value = state.board[cell.id];
+    piece.visible = value !== EMPTY;
+
+    if (value === BLACK) {
+      piece.material = blackPieceMaterial;
+    } else if (value === WHITE) {
+      piece.material = whitePieceMaterial;
+    }
   }
 }
 
@@ -511,6 +528,10 @@ function baseColorFor(cell) {
   return (cell.ring + cell.column) % 2 === 0 ? colors.baseTile : colors.alternateTile;
 }
 
+function setEmissive(material, color, intensity) {
+  material.emissive.copy(color).multiplyScalar(intensity);
+}
+
 function refresh() {
   const moves = validMoves(topology, state.board, state.current);
   legalMoves = new Map(moves.map((move) => [move.cellId, move]));
@@ -526,19 +547,20 @@ function refresh() {
 
     if (isHovered) {
       material.color.copy(colors.hover);
-      material.emissive = colors.hover.clone().multiplyScalar(0.14);
+      setEmissive(material, colors.hover, 0.14);
     } else if (isHintMove) {
       material.color.copy(colors.hint);
-      material.emissive = colors.hint.clone().multiplyScalar(0.16);
+      setEmissive(material, colors.hint, 0.16);
     } else if (isLegal) {
-      material.color.copy(state.current === BLACK ? colors.legalBlack : colors.legalWhite);
-      material.emissive = material.color.clone().multiplyScalar(0.08);
+      const legalColor = state.current === BLACK ? colors.legalBlack : colors.legalWhite;
+      material.color.copy(legalColor);
+      setEmissive(material, legalColor, 0.08);
     } else if (isLastMove) {
       material.color.copy(colors.last);
-      material.emissive = colors.last.clone().multiplyScalar(0.1);
+      setEmissive(material, colors.last, 0.1);
     } else {
       material.color.copy(baseColorFor(cell));
-      material.emissive = new THREE.Color(0x000000);
+      material.emissive.setRGB(0, 0, 0);
     }
 
     const netCell = netCellGroups.get(cell.id);
@@ -554,7 +576,7 @@ function refresh() {
   }
 
   updateLocatorMarker();
-  buildPieces();
+  updatePieces();
   updateHud(moves.length);
 }
 
