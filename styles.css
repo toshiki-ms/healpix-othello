@@ -194,6 +194,14 @@ button[aria-pressed="true"] {
   gap: 0.7rem;
 }
 
+.lang-toggle {
+  flex: 0 0 auto;
+  min-height: 1.9rem;
+  min-width: 2.8rem;
+  padding-inline: 0.55rem;
+  font-size: 0.72rem;
+}
+
 .planet-mark {
   position: relative;
   flex: 0 0 2.3rem;
@@ -281,13 +289,18 @@ p {
   display: grid;
   justify-self: end;
   gap: 0.45rem;
-  width: min(100%, 22rem);
+  width: min(100%, 27rem);
 }
 
 .actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.45rem;
+}
+
+.actions button,
+.difficulty button {
+  overflow-wrap: anywhere;
 }
 
 .difficulty {
@@ -297,7 +310,7 @@ p {
 
 .difficulty-row {
   display: grid;
-  grid-template-columns: 1.8rem repeat(5, minmax(0, 1fr));
+  grid-template-columns: minmax(2.7rem, auto) repeat(5, minmax(0, 1fr));
   align-items: center;
   gap: 0.35rem;
 }

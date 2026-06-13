@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -27,7 +27,7 @@
           <line id="axisLineY" class="axis-line axis-line-y" x1="78" y1="82" x2="36" y2="38" marker-end="url(#axisArrowY)" />
           <line id="axisLineX" class="axis-line axis-line-x" x1="78" y1="82" x2="136" y2="92" marker-end="url(#axisArrowX)" />
           <circle class="axis-origin" cx="78" cy="82" r="5" />
-          <text id="axisTextZ" class="axis-text axis-text-z" x="102" y="27">+Z 北</text>
+          <text id="axisTextZ" class="axis-text axis-text-z" x="102" y="27">+Z North</text>
           <text id="axisTextY" class="axis-text axis-text-y" x="34" y="31">+Y</text>
           <text id="axisTextX" class="axis-text axis-text-x" x="132" y="115">+X</text>
         </svg>
@@ -39,54 +39,55 @@
             <h1>HEALPix Othello</h1>
             <p id="resolutionLabel">NSIDE 2 / 48 cells</p>
           </div>
+          <button class="lang-toggle" id="languageToggle" type="button">JA</button>
         </div>
 
         <div class="score-strip" aria-live="polite">
           <div class="score-pill score-pill-black">
-            <span>黒</span>
+            <span id="blackScoreLabel">Black</span>
             <strong id="blackScore">2</strong>
           </div>
-          <div class="turn-pill" id="turnLabel">黒番</div>
+          <div class="turn-pill" id="turnLabel">Black turn</div>
           <div class="score-pill score-pill-white">
-            <span>白</span>
+            <span id="whiteScoreLabel">White</span>
             <strong id="whiteScore">2</strong>
           </div>
         </div>
 
         <div class="control-stack">
           <div class="actions">
-            <button id="blackNpcToggle" type="button" aria-pressed="false">黒PC</button>
-            <button id="whiteNpcToggle" type="button" aria-pressed="true">白NPC</button>
-            <button id="passButton" type="button" disabled>パス</button>
-            <button id="resetButton" type="button">新規</button>
+            <button id="blackNpcToggle" type="button" aria-pressed="false">Black Human</button>
+            <button id="whiteNpcToggle" type="button" aria-pressed="true">White NPC</button>
+            <button id="passButton" type="button" disabled>Pass</button>
+            <button id="resetButton" type="button">New</button>
           </div>
           <div class="difficulty" role="group" aria-label="NPC difficulty by color">
             <div class="difficulty-row">
-              <span class="difficulty-label">黒</span>
-              <button type="button" data-player="black" data-difficulty="easy" aria-pressed="true">弱</button>
-              <button type="button" data-player="black" data-difficulty="normal" aria-pressed="false">中</button>
-              <button type="button" data-player="black" data-difficulty="hard" aria-pressed="false">強</button>
-              <button type="button" data-player="black" data-difficulty="expert" aria-pressed="false">最強</button>
-              <button type="button" data-player="black" data-difficulty="god" aria-pressed="false">神</button>
+              <span class="difficulty-label" id="blackDifficultyLabel">Black</span>
+              <button type="button" data-player="black" data-difficulty="easy" aria-pressed="true">Weak</button>
+              <button type="button" data-player="black" data-difficulty="normal" aria-pressed="false">Normal</button>
+              <button type="button" data-player="black" data-difficulty="hard" aria-pressed="false">Strong</button>
+              <button type="button" data-player="black" data-difficulty="expert" aria-pressed="false">Expert</button>
+              <button type="button" data-player="black" data-difficulty="god" aria-pressed="false">God</button>
             </div>
             <div class="difficulty-row">
-              <span class="difficulty-label">白</span>
-              <button type="button" data-player="white" data-difficulty="easy" aria-pressed="true">弱</button>
-              <button type="button" data-player="white" data-difficulty="normal" aria-pressed="false">中</button>
-              <button type="button" data-player="white" data-difficulty="hard" aria-pressed="false">強</button>
-              <button type="button" data-player="white" data-difficulty="expert" aria-pressed="false">最強</button>
-              <button type="button" data-player="white" data-difficulty="god" aria-pressed="false">神</button>
+              <span class="difficulty-label" id="whiteDifficultyLabel">White</span>
+              <button type="button" data-player="white" data-difficulty="easy" aria-pressed="true">Weak</button>
+              <button type="button" data-player="white" data-difficulty="normal" aria-pressed="false">Normal</button>
+              <button type="button" data-player="white" data-difficulty="hard" aria-pressed="false">Strong</button>
+              <button type="button" data-player="white" data-difficulty="expert" aria-pressed="false">Expert</button>
+              <button type="button" data-player="white" data-difficulty="god" aria-pressed="false">God</button>
             </div>
           </div>
-          <button class="hint-action" id="godHintButton" type="button">神の一手</button>
+          <button class="hint-action" id="godHintButton" type="button">God move</button>
         </div>
       </section>
 
-      <output class="status-line" id="message" aria-live="polite">合法手</output>
+      <output class="status-line" id="message" aria-live="polite">Legal moves</output>
 
       <section class="net-panel" aria-label="HEALPix unfolded board">
         <div class="net-head">
-          <span>展開図</span>
+          <span id="netTitle">Unfolded map</span>
         </div>
         <svg id="netBoard" role="img" aria-label="HEALPix unfolded board"></svg>
       </section>

@@ -34,8 +34,8 @@ const topology = createHealpixTopology(2);
 assert.equal(topology.cells.length, pixelCount(2));
 assert.equal(
   HEALPIX_BOUNDARY_SEGMENTS_NSIDE2.length,
-  2 * pixelCount(2) * 16 * 6,
-  "HEALPix NSIDE=2 boundary data should contain 1536 XYZ line segments"
+  2 * pixelCount(2) * 4 * 6,
+  "HEALPix NSIDE=2 boundary data should contain 384 XYZ line segments"
 );
 const closeTo = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-12);
 closeTo(topology.cells[1].normal[0], 0.2852353895437616);

@@ -19,15 +19,23 @@ const canvas = document.querySelector("#board");
 const resolutionLabel = document.querySelector("#resolutionLabel");
 const blackScore = document.querySelector("#blackScore");
 const whiteScore = document.querySelector("#whiteScore");
+const blackScoreLabel = document.querySelector("#blackScoreLabel");
+const whiteScoreLabel = document.querySelector("#whiteScoreLabel");
 const turnLabel = document.querySelector("#turnLabel");
 const message = document.querySelector("#message");
 const blackNpcToggle = document.querySelector("#blackNpcToggle");
 const whiteNpcToggle = document.querySelector("#whiteNpcToggle");
 const passButton = document.querySelector("#passButton");
 const resetButton = document.querySelector("#resetButton");
+const languageToggle = document.querySelector("#languageToggle");
 const netBoard = document.querySelector("#netBoard");
 const netPanel = document.querySelector(".net-panel");
+const netTitle = document.querySelector("#netTitle");
+const blackDifficultyLabel = document.querySelector("#blackDifficultyLabel");
+const whiteDifficultyLabel = document.querySelector("#whiteDifficultyLabel");
+const difficultyGroup = document.querySelector(".difficulty");
 const axisWidget = document.querySelector("#axisWidget");
+const axisTextZ = document.querySelector("#axisTextZ");
 const axisWidgetItems = [
   {
     line: document.querySelector("#axisLineX"),
@@ -62,6 +70,96 @@ const axisWidgetRotation = new THREE.Quaternion();
 const axisWidgetDirection = new THREE.Vector3();
 const godHintButton = document.querySelector("#godHintButton");
 const difficultyButtons = [...document.querySelectorAll("[data-player][data-difficulty]")];
+
+const TRANSLATIONS = {
+  en: {
+    axisNorth: "+Z North",
+    black: "Black",
+    white: "White",
+    blackShort: "Black",
+    whiteShort: "White",
+    human: "Human",
+    npc: "NPC",
+    pass: "Pass",
+    newGame: "New",
+    net: "Unfolded map",
+    difficultyAria: "NPC difficulty by color",
+    switchLanguage: "JA",
+    switchLanguageLabel: "Switch language to Japanese",
+    difficulties: {
+      easy: "Weak",
+      normal: "Normal",
+      hard: "Strong",
+      expert: "Expert",
+      god: "God"
+    },
+    turn: (color, npc) => `${color} turn${npc ? " NPC" : ""}`,
+    gameOver: "Game over",
+    draw: "Draw",
+    blackWin: "Black wins",
+    whiteWin: "White wins",
+    scoreLine: (winner, black, white) => `${winner} / Black ${black} - White ${white}`,
+    noMovesFor: (color, moveTotal) => `${color} has no legal moves / Legal moves ${moveTotal}`,
+    noLegalMoves: "No legal moves",
+    legalMoves: (moveTotal) => `Legal moves ${moveTotal}`,
+    godHint: "God move",
+    playHint: "Play this move",
+    illegalMove: "Illegal move",
+    calculatingHint: "Calculating",
+    calculatingMessage: "Calculating god move",
+    noHint: "No god move",
+    hintShown: "God move highlighted"
+  },
+  ja: {
+    axisNorth: "+Z 北",
+    black: "黒",
+    white: "白",
+    blackShort: "黒",
+    whiteShort: "白",
+    human: "PC",
+    npc: "NPC",
+    pass: "パス",
+    newGame: "新規",
+    net: "展開図",
+    difficultyAria: "色ごとのNPC難易度",
+    switchLanguage: "EN",
+    switchLanguageLabel: "表示言語を英語に切り替え",
+    difficulties: {
+      easy: "弱",
+      normal: "中",
+      hard: "強",
+      expert: "最強",
+      god: "神"
+    },
+    turn: (color, npc) => `${color}番${npc ? " NPC" : ""}`,
+    gameOver: "終了",
+    draw: "引き分け",
+    blackWin: "黒勝ち",
+    whiteWin: "白勝ち",
+    scoreLine: (winner, black, white) => `${winner} / 黒 ${black} - 白 ${white}`,
+    noMovesFor: (color, moveTotal) => `${color}は合法手なし / 合法手 ${moveTotal}`,
+    noLegalMoves: "合法手なし",
+    legalMoves: (moveTotal) => `合法手 ${moveTotal}`,
+    godHint: "神の一手",
+    playHint: "この手を打つ",
+    illegalMove: "そこには置けません",
+    calculatingHint: "計算中",
+    calculatingMessage: "神の一手を計算中",
+    noHint: "神の一手なし",
+    hintShown: "神の一手を表示"
+  }
+};
+
+const languageOptions = new Set(Object.keys(TRANSLATIONS));
+const requestedLanguage = new URLSearchParams(window.location.search).get("lang");
+const storedLanguage = window.localStorage.getItem("healpixOthelloLanguage");
+let currentLanguage = languageOptions.has(requestedLanguage)
+  ? requestedLanguage
+  : languageOptions.has(storedLanguage)
+    ? storedLanguage
+    : navigator.language.startsWith("ja")
+      ? "ja"
+      : "en";
 
 const colors = {
   baseTile: new THREE.Color("#5f6768"),
@@ -177,6 +275,7 @@ buildHealpixBoundaries();
 buildTiles();
 buildNet();
 resize();
+applyLanguage();
 updatePlayerButtons();
 updateDifficultyButtons();
 refresh();
@@ -193,7 +292,47 @@ whiteNpcToggle.addEventListener("click", () => toggleNpc(WHITE));
 passButton.addEventListener("click", requestPass);
 resetButton.addEventListener("click", resetGame);
 godHintButton.addEventListener("click", requestGodHint);
+languageToggle.addEventListener("click", toggleLanguage);
 difficultyButtons.forEach((button) => button.addEventListener("click", setDifficulty));
+
+function labels() {
+  return TRANSLATIONS[currentLanguage];
+}
+
+function colorLabel(player) {
+  return player === BLACK ? labels().black : labels().white;
+}
+
+function applyLanguage() {
+  const text = labels();
+  document.documentElement.lang = currentLanguage;
+  blackScoreLabel.textContent = text.blackShort;
+  whiteScoreLabel.textContent = text.whiteShort;
+  blackDifficultyLabel.textContent = text.blackShort;
+  whiteDifficultyLabel.textContent = text.whiteShort;
+  passButton.textContent = text.pass;
+  resetButton.textContent = text.newGame;
+  netTitle.textContent = text.net;
+  axisTextZ.textContent = text.axisNorth;
+  languageToggle.textContent = text.switchLanguage;
+  languageToggle.setAttribute("aria-label", text.switchLanguageLabel);
+  difficultyGroup.setAttribute("aria-label", text.difficultyAria);
+
+  for (const button of difficultyButtons) {
+    button.textContent = text.difficulties[button.dataset.difficulty];
+  }
+}
+
+function toggleLanguage() {
+  currentLanguage = currentLanguage === "en" ? "ja" : "en";
+  window.localStorage.setItem("healpixOthelloLanguage", currentLanguage);
+  const url = new URL(window.location.href);
+  url.searchParams.set("lang", currentLanguage);
+  window.history.replaceState(null, "", url);
+  applyLanguage();
+  updatePlayerButtons();
+  refresh();
+}
 
 function buildHealpixBoundaries() {
   healpixBoundaryGroup.clear();
@@ -421,27 +560,26 @@ function refresh() {
 
 function updateHud(moveTotal) {
   const counts = countPieces(state.board);
+  const text = labels();
   resolutionLabel.textContent = `NSIDE ${topology.nside} / ${pixelCount(topology.nside)} cells`;
   blackScore.textContent = String(counts.black);
   whiteScore.textContent = String(counts.white);
 
   if (state.gameOver) {
-    const winner = counts.black === counts.white ? "引き分け" : counts.black > counts.white ? "黒勝ち" : "白勝ち";
-    turnLabel.textContent = "終了";
+    const winner = counts.black === counts.white ? text.draw : counts.black > counts.white ? text.blackWin : text.whiteWin;
+    turnLabel.textContent = text.gameOver;
     turnLabel.style.color = "#f0c84b";
-    message.textContent = `${winner} / 黒 ${counts.black} - 白 ${counts.white}`;
+    message.textContent = text.scoreLine(winner, counts.black, counts.white);
   } else {
-    const playerLabel = state.current === BLACK ? "黒番" : "白番";
-    const npcLabel = isNpcTurn() ? " NPC" : "";
-    turnLabel.textContent = `${playerLabel}${npcLabel}`;
+    turnLabel.textContent = text.turn(colorLabel(state.current), isNpcTurn());
     turnLabel.style.color = state.current === BLACK ? "#64c3a5" : "#f0c84b";
 
     if (state.lastMove?.autoPass) {
-      message.textContent = `${state.current === BLACK ? "白" : "黒"}は合法手なし / 合法手 ${moveTotal}`;
+      message.textContent = text.noMovesFor(colorLabel(state.current === BLACK ? WHITE : BLACK), moveTotal);
     } else if (moveTotal === 0) {
-      message.textContent = "合法手なし";
+      message.textContent = text.noLegalMoves;
     } else {
-      message.textContent = `合法手 ${moveTotal}`;
+      message.textContent = text.legalMoves(moveTotal);
     }
   }
 
@@ -449,7 +587,7 @@ function updateHud(moveTotal) {
   const canRequestHint = !state.gameOver && !isNpcTurn() && moveTotal > 0;
   godHintButton.disabled = hintBusy || !canRequestHint;
   if (!hintBusy) {
-    godHintButton.textContent = hintMoveId !== null && legalMoves.has(hintMoveId) ? "この手を打つ" : "神の一手";
+    godHintButton.textContent = hintMoveId !== null && legalMoves.has(hintMoveId) ? text.playHint : text.godHint;
   }
 }
 
@@ -616,7 +754,7 @@ function pickCell(event) {
 function playCell(cellId) {
   if (!legalMoves.has(cellId)) {
     if (state.board[cellId] === EMPTY) {
-      message.textContent = "そこには置けません";
+      message.textContent = labels().illegalMove;
     }
     return;
   }
@@ -688,8 +826,10 @@ function updatePlayerButtons() {
 
   blackNpcToggle.setAttribute("aria-pressed", String(blackIsNpc));
   whiteNpcToggle.setAttribute("aria-pressed", String(whiteIsNpc));
-  blackNpcToggle.textContent = blackIsNpc ? "黒NPC" : "黒PC";
-  whiteNpcToggle.textContent = whiteIsNpc ? "白NPC" : "白PC";
+  const text = labels();
+  const joiner = currentLanguage === "ja" ? "" : " ";
+  blackNpcToggle.textContent = `${text.blackShort}${joiner}${blackIsNpc ? text.npc : text.human}`;
+  whiteNpcToggle.textContent = `${text.whiteShort}${joiner}${whiteIsNpc ? text.npc : text.human}`;
 }
 
 function playerForDifficultyButton(button) {
@@ -765,8 +905,8 @@ function requestGodHint() {
   hintMoveId = null;
   hintBusy = true;
   godHintButton.disabled = true;
-  godHintButton.textContent = "計算中";
-  message.textContent = "神の一手を計算中";
+  godHintButton.textContent = labels().calculatingHint;
+  message.textContent = labels().calculatingMessage;
 
   window.setTimeout(() => {
     if (hintToken !== requestToken || positionKey() !== requestKey || state.gameOver || isNpcTurn()) {
@@ -781,13 +921,13 @@ function requestGodHint() {
     if (!move || hintToken !== requestToken || positionKey() !== requestKey) {
       clearHint();
       refresh();
-      message.textContent = "神の一手なし";
+      message.textContent = labels().noHint;
       return;
     }
 
     hintMoveId = move.cellId;
     hoveredCellId = null;
     refresh();
-    message.textContent = "神の一手を表示";
+    message.textContent = labels().hintShown;
   }, 30);
 }

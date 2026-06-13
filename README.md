@@ -1,16 +1,21 @@
 # HEALPix Othello
 
-HEALPix の `NSIDE=2` グリッド上で遊ぶオセロです。球面上の盤面と NESTED 展開図を並べて表示し、展開図からも着手できます。
+Othello played on a spherical HEALPix `NSIDE=2` board. The app shows both a 3D sphere and a NESTED unfolded map, and moves can be played from either view.
 
-Play: https://toshiki-ms.github.io/healpix-othello/
+Play:
+
+- English: https://toshiki-ms.github.io/healpix-othello/?lang=en
+- Japanese: https://toshiki-ms.github.io/healpix-othello/?lang=ja
 
 ## Features
 
-- NSIDE 2 / 48 セルの HEALPix オセロ
-- 球面盤面と展開図の同期表示
-- 黒白それぞれの PC / NPC 切り替え
-- 黒NPC・白NPCごとの難易度設定
-- 神の一手ヒント
+- HEALPix `NSIDE=2` board with 48 cells
+- 3D spherical board with official HEALPix pixel boundaries
+- NESTED unfolded map synchronized with the sphere
+- Human/NPC toggle for black and white
+- Per-side NPC difficulty settings
+- God-move hint mode
+- English and Japanese UI
 
 ## Development
 
@@ -28,14 +33,12 @@ npm run test:logic
 npm run build
 ```
 
-## Deploy
+## Deployment
 
-This repository is ready for GitHub Pages via the `gh-pages` branch.
+This repository is published with GitHub Pages from the `gh-pages` branch.
 
-1. Push the repository to GitHub.
-2. Open repository settings.
-3. Go to Pages.
-4. Set the source to the `gh-pages` branch if it is not selected automatically.
-5. Push to `main`, or run the `Deploy GitHub Pages` workflow manually.
+1. Push changes to `main`.
+2. The GitHub Actions workflow builds the Vite app.
+3. The generated `dist/` output is published to `gh-pages`.
 
-The workflow builds the Vite app and publishes `dist/` to `gh-pages`.
+If Pages is not enabled automatically, open the repository settings, go to Pages, and set the source to the `gh-pages` branch.
