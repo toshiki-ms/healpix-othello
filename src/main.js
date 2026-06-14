@@ -92,7 +92,7 @@ const TRANSLATIONS = {
     hideSettings: "Hide settings",
     showSettingsLabel: "Show NPC and game settings",
     hideSettingsLabel: "Hide NPC and game settings",
-    showMap: "Map",
+    showMap: "Open",
     hideMap: "Hide",
     showMapLabel: "Show unfolded map",
     hideMapLabel: "Hide unfolded map",
@@ -138,7 +138,7 @@ const TRANSLATIONS = {
     hideSettings: "設定を隠す",
     showSettingsLabel: "NPCとゲーム設定を表示",
     hideSettingsLabel: "NPCとゲーム設定を隠す",
-    showMap: "展開図",
+    showMap: "開く",
     hideMap: "隠す",
     showMapLabel: "展開図を表示",
     hideMapLabel: "展開図を隠す",
@@ -224,7 +224,7 @@ renderer.setClearColor(0x363b3d, 1);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x363b3d, 4.1, 7.6);
+scene.fog = new THREE.Fog(0x363b3d, 5.6, 11.2);
 
 const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
 camera.position.set(0.32, 0.55, 5.9);
