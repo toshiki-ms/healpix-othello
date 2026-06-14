@@ -30,7 +30,6 @@ const resetButton = document.querySelector("#resetButton");
 const homeButton = document.querySelector("#homeButton");
 const controlStack = document.querySelector("#controlStack");
 const controlsToggle = document.querySelector("#controlsToggle");
-const languageToggle = document.querySelector("#languageToggle");
 const hud = document.querySelector(".hud");
 const netBoard = document.querySelector("#netBoard");
 const netPanel = document.querySelector(".net-panel");
@@ -100,8 +99,6 @@ const TRANSLATIONS = {
     hideMap: "Hide",
     showMapLabel: "Show unfolded map",
     hideMapLabel: "Hide unfolded map",
-    switchLanguage: "JA",
-    switchLanguageLabel: "Switch language to Japanese",
     difficulties: {
       easy: "Weak",
       normal: "Normal",
@@ -154,8 +151,6 @@ const TRANSLATIONS = {
     hideMap: "隠す",
     showMapLabel: "展開図を表示",
     hideMapLabel: "展開図を隠す",
-    switchLanguage: "EN",
-    switchLanguageLabel: "表示言語を英語に切り替え",
     difficulties: {
       easy: "弱",
       normal: "中",
@@ -199,6 +194,8 @@ let currentLanguage = languageOptions.has(requestedLanguage)
     : navigator.language.startsWith("ja")
       ? "ja"
       : "en";
+window.localStorage.setItem("healpixGameLanguage", currentLanguage);
+window.localStorage.setItem("healpixOthelloLanguage", currentLanguage);
 
 const colors = {
   baseTile: new THREE.Color("#5f6768"),
@@ -358,7 +355,6 @@ resetButton.addEventListener("click", resetGame);
 godHintButton.addEventListener("click", requestGodHint);
 homeButton.addEventListener("click", goHome);
 controlsToggle.addEventListener("click", toggleControlsPanel);
-languageToggle.addEventListener("click", toggleLanguage);
 netToggle.addEventListener("click", toggleNetPanel);
 indexOverlayToggle.addEventListener("click", toggleIndexOverlay);
 difficultyButtons.forEach((button) => button.addEventListener("click", setDifficulty));
@@ -389,8 +385,6 @@ function applyLanguage() {
   resetButton.textContent = text.newGame;
   netTitle.textContent = text.net;
   axisTextZ.textContent = text.axisNorth;
-  languageToggle.textContent = text.switchLanguage;
-  languageToggle.setAttribute("aria-label", text.switchLanguageLabel);
   difficultyGroup.setAttribute("aria-label", text.difficultyAria);
   updatePanelVisibility();
   updateIndexOverlayButton();
@@ -435,18 +429,6 @@ function handleCompactLayoutChange(event) {
   controlsCollapsed = event.matches;
   netCollapsed = event.matches;
   updatePanelVisibility();
-}
-
-function toggleLanguage() {
-  currentLanguage = currentLanguage === "en" ? "ja" : "en";
-  window.localStorage.setItem("healpixGameLanguage", currentLanguage);
-  window.localStorage.setItem("healpixOthelloLanguage", currentLanguage);
-  const url = new URL(window.location.href);
-  url.searchParams.set("lang", currentLanguage);
-  window.history.replaceState(null, "", url);
-  applyLanguage();
-  updatePlayerButtons();
-  refresh();
 }
 
 function goHome() {

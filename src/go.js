@@ -52,7 +52,6 @@ const goOverlayToggle = document.querySelector("#goOverlayToggle");
 const controlStack = document.querySelector("#controlStack");
 const homeButton = document.querySelector("#homeButton");
 const controlsToggle = document.querySelector("#controlsToggle");
-const languageToggle = document.querySelector("#languageToggle");
 const hud = document.querySelector(".hud");
 const netBoard = document.querySelector("#netBoard");
 const netPanel = document.querySelector(".net-panel");
@@ -140,8 +139,6 @@ const TRANSLATIONS = {
     hideMap: "Hide",
     showMapLabel: "Show vertex map",
     hideMapLabel: "Hide vertex map",
-    switchLanguage: "JA",
-    switchLanguageLabel: "Switch language to Japanese",
     turn: (color, npc) => `${color} turn${npc ? " NPC" : ""}`,
     gameOver: "Game over",
     scoreLine: (black, white, neutral, deadBlack, deadWhite) =>
@@ -206,8 +203,6 @@ const TRANSLATIONS = {
     hideMap: "隠す",
     showMapLabel: "頂点展開図を表示",
     hideMapLabel: "頂点展開図を隠す",
-    switchLanguage: "EN",
-    switchLanguageLabel: "表示言語を英語に切り替え",
     turn: (color, npc) => `${color}番${npc ? " NPC" : ""}`,
     gameOver: "終了",
     scoreLine: (black, white, neutral, deadBlack, deadWhite) =>
@@ -237,6 +232,8 @@ let currentLanguage = languageOptions.has(requestedLanguage)
     : navigator.language.startsWith("ja")
       ? "ja"
       : "en";
+window.localStorage.setItem("healpixGameLanguage", currentLanguage);
+window.localStorage.setItem("healpixGoLanguage", currentLanguage);
 
 const colors = {
   point: new THREE.Color("#8aa0a8"),
@@ -343,11 +340,12 @@ scene.add(globe);
 
 const lineGroup = new THREE.Group();
 const pointGroup = new THREE.Group();
+const hitTargetGroup = new THREE.Group();
 const territoryGroup = new THREE.Group();
 const stoneGroup = new THREE.Group();
 const poleGroup = new THREE.Group();
 const overlayLabelGroup = new THREE.Group();
-scene.add(lineGroup, pointGroup, territoryGroup, stoneGroup, poleGroup, overlayLabelGroup);
+scene.add(lineGroup, pointGroup, hitTargetGroup, territoryGroup, stoneGroup, poleGroup, overlayLabelGroup);
 
 const unitZ = new THREE.Vector3(0, 0, 1);
 const raycaster = new THREE.Raycaster();
@@ -355,6 +353,7 @@ const pointer = new THREE.Vector2();
 const pointMeshes = new Map();
 const netVertexGroups = new Map();
 const pointGeometry = new THREE.SphereGeometry(1, 16, 10);
+const hitTargetGeometry = new THREE.SphereGeometry(1, 12, 8);
 const territoryRingGeometry = new THREE.RingGeometry(0.052, 0.075, 32);
 const stoneGeometry = new THREE.SphereGeometry(1, 24, 14);
 const poleGeometry = new THREE.RingGeometry(0.052, 0.076, 36);
@@ -368,6 +367,12 @@ const whiteStoneMaterial = new THREE.MeshStandardMaterial({
   color: colors.whiteStone,
   roughness: 0.42,
   metalness: 0.02
+});
+const hitTargetMaterial = new THREE.MeshBasicMaterial({
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  colorWrite: false
 });
 const deadBlackStoneMaterial = new THREE.MeshStandardMaterial({
   color: colors.blackStone,
@@ -443,7 +448,6 @@ resetButton.addEventListener("click", resetGame);
 goOverlayToggle.addEventListener("click", toggleOverlayMode);
 homeButton.addEventListener("click", goHome);
 controlsToggle.addEventListener("click", toggleControlsPanel);
-languageToggle.addEventListener("click", toggleLanguage);
 netToggle.addEventListener("click", toggleNetPanel);
 if (compactLayoutQuery.addEventListener) {
   compactLayoutQuery.addEventListener("change", handleCompactLayoutChange);
@@ -481,8 +485,6 @@ function applyLanguage() {
   axisTextZ.textContent = text.axisNorth;
   homeButton.textContent = text.home;
   homeButton.setAttribute("aria-label", text.homeLabel);
-  languageToggle.textContent = text.switchLanguage;
-  languageToggle.setAttribute("aria-label", text.switchLanguageLabel);
   updatePanelVisibility();
   updateOverlayButton();
 }
@@ -522,18 +524,6 @@ function handleCompactLayoutChange(event) {
   controlsCollapsed = event.matches;
   netCollapsed = event.matches;
   updatePanelVisibility();
-}
-
-function toggleLanguage() {
-  currentLanguage = currentLanguage === "en" ? "ja" : "en";
-  window.localStorage.setItem("healpixGameLanguage", currentLanguage);
-  window.localStorage.setItem("healpixGoLanguage", currentLanguage);
-  const url = new URL(window.location.href);
-  url.searchParams.set("lang", currentLanguage);
-  window.history.replaceState(null, "", url);
-  applyLanguage();
-  updatePlayerButtons();
-  refresh();
 }
 
 function goHome() {
@@ -618,7 +608,9 @@ function buildLines() {
 
 function buildPoints() {
   pointGroup.clear();
+  hitTargetGroup.clear();
   pointMeshes.clear();
+  const hitTargetScale = topology.nside === 2 ? 0.14 : 0.085;
 
   for (const vertex of topology.vertices) {
     if (poleIds.has(vertex.id)) {
@@ -637,6 +629,12 @@ function buildPoints() {
     point.userData.vertexId = vertex.id;
     pointGroup.add(point);
     pointMeshes.set(vertex.id, point);
+
+    const hitTarget = new THREE.Mesh(hitTargetGeometry, hitTargetMaterial);
+    hitTarget.position.copy(normal).multiplyScalar(1.067);
+    hitTarget.scale.setScalar(hitTargetScale);
+    hitTarget.userData.vertexId = vertex.id;
+    hitTargetGroup.add(hitTarget);
   }
 }
 
@@ -699,6 +697,7 @@ function buildNet() {
 
   for (const vertex of sortedVertices) {
     const group = document.createElementNS(namespace, "g");
+    const hitTarget = document.createElementNS(namespace, "circle");
     const point = document.createElementNS(namespace, "circle");
     const ownerLabel = document.createElementNS(namespace, "text");
     const stone = document.createElementNS(namespace, "circle");
@@ -706,6 +705,10 @@ function buildNet() {
 
     group.classList.add("go-net-vertex");
     group.dataset.vertexId = String(vertex.id);
+    hitTarget.classList.add("go-net-hit");
+    hitTarget.setAttribute("cx", String(vertex.gridJp));
+    hitTarget.setAttribute("cy", String(vertex.gridJr));
+    hitTarget.setAttribute("r", "0.34");
     point.classList.add("go-net-point");
     point.setAttribute("cx", String(vertex.gridJp));
     point.setAttribute("cy", String(vertex.gridJr));
@@ -721,7 +724,7 @@ function buildNet() {
     overlayLabel.setAttribute("x", String(vertex.gridJp));
     overlayLabel.setAttribute("y", String(vertex.gridJr));
 
-    group.append(point, ownerLabel, stone, overlayLabel);
+    group.append(hitTarget, point, ownerLabel, stone, overlayLabel);
     group.addEventListener("pointerenter", () => {
       hoveredVertexId = vertex.id;
       focusVertexId = vertex.id;
@@ -1434,10 +1437,16 @@ function pickVertex(event) {
   pointer.y = -(((event.clientY - bounds.top) / bounds.height) * 2 - 1);
   raycaster.setFromCamera(pointer, camera);
 
-  const intersections = raycaster.intersectObjects([...stoneGroup.children, ...pointGroup.children], false);
-  if (intersections.length === 0) {
-    return null;
+  const targets =
+    event.pointerType === "touch" || event.pointerType === "pen"
+      ? hitTargetGroup.children
+      : [...stoneGroup.children, ...pointGroup.children];
+  const intersections = raycaster.intersectObjects(targets, false);
+  for (const intersection of intersections) {
+    if (intersection.object.position.dot(camera.position) > 0) {
+      return intersection.object.userData.vertexId;
+    }
   }
 
-  return intersections[0].object.userData.vertexId;
+  return null;
 }
