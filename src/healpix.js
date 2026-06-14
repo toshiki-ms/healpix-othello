@@ -285,6 +285,7 @@ export function createHealpixTopology(nside = DEFAULT_NSIDE) {
     }
   }
 
+  let ringIndex = 0;
   for (let ring = 1; ring <= maxRing; ring += 1) {
     const ids = cells
       .filter((cell) => cell.ring === ring)
@@ -292,10 +293,12 @@ export function createHealpixTopology(nside = DEFAULT_NSIDE) {
       .map((cell, column) => {
         cell.column = column;
         cell.nphi = ringCellCount(ring, nside);
+        cell.ringIndex = ringIndex + column;
         return cell.id;
       });
 
     rings.set(ring, ids);
+    ringIndex += ids.length;
   }
 
   const cellAt = (ring, column) => {

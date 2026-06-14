@@ -73,6 +73,7 @@ const axisWidgetItems = [
 const axisWidgetRotation = new THREE.Quaternion();
 const axisWidgetDirection = new THREE.Vector3();
 const godHintButton = document.querySelector("#godHintButton");
+const indexOverlayToggle = document.querySelector("#indexOverlayToggle");
 const difficultyButtons = [...document.querySelectorAll("[data-player][data-difficulty]")];
 
 const TRANSLATIONS = {
@@ -120,7 +121,13 @@ const TRANSLATIONS = {
     calculatingHint: "Calculating",
     calculatingMessage: "Calculating god move",
     noHint: "No god move",
-    hintShown: "God move highlighted"
+    hintShown: "God move highlighted",
+    indexModes: {
+      off: "Index off",
+      nest: "Nest index",
+      ring: "Ring index"
+    },
+    indexModeLabel: (mode) => `Show ${mode} overlay`
   },
   ja: {
     axisNorth: "+Z 北",
@@ -166,7 +173,13 @@ const TRANSLATIONS = {
     calculatingHint: "計算中",
     calculatingMessage: "神の一手を計算中",
     noHint: "神の一手なし",
-    hintShown: "神の一手を表示"
+    hintShown: "神の一手を表示",
+    indexModes: {
+      off: "番号なし",
+      nest: "Nest番号",
+      ring: "Ring番号"
+    },
+    indexModeLabel: (mode) => `${mode}を表示`
   }
 };
 
@@ -214,6 +227,8 @@ const compactLayoutQuery = window.matchMedia("(max-width: 640px)");
 let controlsCollapsed = compactLayoutQuery.matches;
 let netCollapsed = compactLayoutQuery.matches;
 let panelChoiceChanged = false;
+const indexOverlayModes = Object.freeze(["off", "nest", "ring"]);
+let indexOverlayMode = "off";
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -229,7 +244,9 @@ scene.background = backgroundColor;
 scene.fog = new THREE.Fog(0x50575a, 5.6, 11.2);
 
 const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
-camera.position.set(0.32, 0.55, 5.9);
+camera.up.set(0, 0, 1);
+camera.position.set(5.9, 0, 0);
+camera.lookAt(0, 0, 0);
 const cameraFocusTarget = new THREE.Vector3();
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -275,7 +292,8 @@ scene.add(healpixBoundaryGroup);
 
 const tileGroup = new THREE.Group();
 const pieceGroup = new THREE.Group();
-scene.add(tileGroup, pieceGroup);
+const indexLabelGroup = new THREE.Group();
+scene.add(tileGroup, pieceGroup, indexLabelGroup);
 
 const unitZ = new THREE.Vector3(0, 0, 1);
 const unitY = new THREE.Vector3(0, 1, 0);
@@ -335,6 +353,7 @@ godHintButton.addEventListener("click", requestGodHint);
 controlsToggle.addEventListener("click", toggleControlsPanel);
 languageToggle.addEventListener("click", toggleLanguage);
 netToggle.addEventListener("click", toggleNetPanel);
+indexOverlayToggle.addEventListener("click", toggleIndexOverlay);
 difficultyButtons.forEach((button) => button.addEventListener("click", setDifficulty));
 if (compactLayoutQuery.addEventListener) {
   compactLayoutQuery.addEventListener("change", handleCompactLayoutChange);
@@ -365,6 +384,7 @@ function applyLanguage() {
   languageToggle.setAttribute("aria-label", text.switchLanguageLabel);
   difficultyGroup.setAttribute("aria-label", text.difficultyAria);
   updatePanelVisibility();
+  updateIndexOverlayButton();
 
   for (const button of difficultyButtons) {
     button.textContent = text.difficulties[button.dataset.difficulty];
@@ -476,6 +496,7 @@ function buildNet() {
     const group = document.createElementNS(namespace, "g");
     const shape = document.createElementNS(namespace, "polygon");
     const piece = document.createElementNS(namespace, "circle");
+    const indexLabel = document.createElementNS(namespace, "text");
     const x = cell.gridJp;
     const y = cell.gridJr;
     const radius = 0.46;
@@ -491,8 +512,11 @@ function buildNet() {
     piece.setAttribute("cx", String(x));
     piece.setAttribute("cy", String(y));
     piece.setAttribute("r", "0.22");
+    indexLabel.classList.add("net-index-label");
+    indexLabel.setAttribute("x", String(x));
+    indexLabel.setAttribute("y", String(y));
 
-    group.append(shape, piece);
+    group.append(shape, piece, indexLabel);
     group.addEventListener("pointerenter", () => {
       hoveredCellId = cell.id;
       focusCellId = cell.id;
@@ -513,8 +537,120 @@ function buildNet() {
     });
 
     netBoard.append(group);
-    netCellGroups.set(cell.id, { group, piece });
+    netCellGroups.set(cell.id, { group, piece, indexLabel });
   }
+}
+
+function labelForIndexOverlay(cell) {
+  if (indexOverlayMode === "nest") {
+    return String(cell.id);
+  }
+
+  if (indexOverlayMode === "ring") {
+    return String(cell.ringIndex);
+  }
+
+  return "";
+}
+
+function updateIndexOverlayButton() {
+  const text = labels();
+  const label = text.indexModes[indexOverlayMode];
+  indexOverlayToggle.textContent = label;
+  indexOverlayToggle.setAttribute("aria-pressed", String(indexOverlayMode !== "off"));
+  indexOverlayToggle.setAttribute("aria-label", text.indexModeLabel(label));
+  updateIndexLabels();
+}
+
+function toggleIndexOverlay() {
+  const currentIndex = indexOverlayModes.indexOf(indexOverlayMode);
+  indexOverlayMode = indexOverlayModes[(currentIndex + 1) % indexOverlayModes.length];
+  updateIndexOverlayButton();
+}
+
+function updateIndexLabels() {
+  const isVisible = indexOverlayMode !== "off";
+
+  for (const cell of topology.cells) {
+    const netCell = netCellGroups.get(cell.id);
+    if (netCell) {
+      netCell.group.classList.toggle("show-index", isVisible);
+      netCell.indexLabel.textContent = labelForIndexOverlay(cell);
+    }
+  }
+
+  rebuildIndexSprites();
+}
+
+function disposeIndexSprites() {
+  for (const label of indexLabelGroup.children) {
+    label.material.map?.dispose();
+    label.material.dispose();
+  }
+
+  indexLabelGroup.clear();
+}
+
+function rebuildIndexSprites() {
+  disposeIndexSprites();
+
+  if (indexOverlayMode === "off") {
+    return;
+  }
+
+  for (const cell of topology.cells) {
+    const label = labelForIndexOverlay(cell);
+    const sprite = createIndexLabelSprite(label);
+    const normal = vectorForCell(cell);
+    sprite.position.copy(normal).multiplyScalar(1.16);
+    sprite.userData.cellId = cell.id;
+    indexLabelGroup.add(sprite);
+  }
+}
+
+function createIndexLabelSprite(label) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  const width = label.includes("/") ? 184 : 92;
+  const height = 48;
+  const pixelRatio = 2;
+  canvas.width = width * pixelRatio;
+  canvas.height = height * pixelRatio;
+  context.scale(pixelRatio, pixelRatio);
+  context.fillStyle = "rgba(12, 14, 15, 0.74)";
+  context.strokeStyle = "rgba(240, 239, 232, 0.72)";
+  context.lineWidth = 2;
+  roundRect(context, 3, 3, width - 6, height - 6, 9);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#f8f4df";
+  context.font = "800 22px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, width / 2, height / 2 + 1);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false
+  });
+  const sprite = new THREE.Sprite(material);
+  const scale = label.includes("/") ? 0.34 : 0.22;
+  sprite.scale.set(scale, scale * (height / width), 1);
+  return sprite;
+}
+
+function roundRect(context, x, y, width, height, radius) {
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.arcTo(x + width, y, x + width, y + height, radius);
+  context.arcTo(x + width, y + height, x, y + height, radius);
+  context.arcTo(x, y + height, x, y, radius);
+  context.arcTo(x, y, x + width, y, radius);
+  context.closePath();
 }
 
 function buildPieceMeshes() {

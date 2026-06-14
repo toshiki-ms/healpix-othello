@@ -356,6 +356,12 @@ p {
   background: rgba(158, 111, 239, 0.14);
 }
 
+.index-action {
+  min-height: 2rem;
+  border-color: rgba(118, 168, 255, 0.44);
+  background: rgba(118, 168, 255, 0.13);
+}
+
 .status-line {
   position: absolute;
   left: 50%;
@@ -487,6 +493,24 @@ p {
 .net-piece.white {
   fill: #eeeae0;
   stroke: rgba(7, 8, 9, 0.5);
+}
+
+.net-index-label {
+  display: none;
+  fill: #f8f4df;
+  font-size: 0.48px;
+  font-weight: 900;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: rgba(7, 8, 9, 0.9);
+  stroke-linejoin: round;
+  stroke-width: 0.095px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.net-cell.show-index .net-index-label {
+  display: block;
 }
 
 @media (max-width: 840px) {
