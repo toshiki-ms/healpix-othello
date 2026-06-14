@@ -1,7 +1,7 @@
 :root {
   color-scheme: dark;
-  --bg: #363b3d;
-  --panel: rgba(34, 37, 39, 0.8);
+  --bg: #50575a;
+  --panel: rgba(38, 42, 44, 0.78);
   --panel-border: rgba(238, 232, 210, 0.16);
   --text: #f0efe8;
   --muted: #aba99e;
@@ -92,8 +92,8 @@ button[aria-pressed="true"] {
   min-height: 480px;
   overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(61, 66, 68, 0.2), rgba(46, 51, 53, 0.68)),
-    #363b3d;
+    linear-gradient(180deg, rgba(92, 100, 103, 0.2), rgba(71, 78, 81, 0.62)),
+    #50575a;
 }
 
 #board {

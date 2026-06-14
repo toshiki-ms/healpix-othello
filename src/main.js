@@ -190,7 +190,7 @@ const colors = {
   last: new THREE.Color("#9e6fef"),
   hint: new THREE.Color("#f052be"),
   locator: new THREE.Color("#fff4a8"),
-  blackPiece: new THREE.Color("#08090a"),
+  blackPiece: new THREE.Color("#111315"),
   whitePiece: new THREE.Color("#eeeae0")
 };
 
@@ -220,11 +220,13 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   alpha: false
 });
-renderer.setClearColor(0x363b3d, 1);
+const backgroundColor = new THREE.Color(0x50575a);
+renderer.setClearColor(backgroundColor, 1);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x363b3d, 5.6, 11.2);
+scene.background = backgroundColor;
+scene.fog = new THREE.Fog(0x50575a, 5.6, 11.2);
 
 const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
 camera.position.set(0.32, 0.55, 5.9);
@@ -241,15 +243,19 @@ controls.zoomSpeed = 0.55;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.28;
 
-const ambient = new THREE.HemisphereLight(0xf8f3de, 0x16191c, 2.2);
+const ambient = new THREE.HemisphereLight(0xffffff, 0x2c3031, 2.35);
 scene.add(ambient);
 
-const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
-keyLight.position.set(2.8, 2.2, 3.2);
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.25);
+keyLight.position.set(2.4, 3.1, 4.8);
 scene.add(keyLight);
 
-const rimLight = new THREE.DirectionalLight(0x67c9b0, 0.82);
-rimLight.position.set(-3.4, -0.4, -2.6);
+const viewFillLight = new THREE.DirectionalLight(0xffffff, 1.35);
+viewFillLight.target.position.set(0, 0, 0);
+scene.add(viewFillLight, viewFillLight.target);
+
+const rimLight = new THREE.DirectionalLight(0x9de4d1, 0.85);
+rimLight.position.set(-3.6, 1.4, 2.8);
 scene.add(rimLight);
 
 const globe = new THREE.Mesh(
@@ -282,8 +288,8 @@ const tileGeometry = new THREE.PlaneGeometry(1, 1);
 const pieceGeometry = new THREE.CylinderGeometry(1, 1, 0.12, 36, 1);
 const blackPieceMaterial = new THREE.MeshStandardMaterial({
   color: colors.blackPiece,
-  roughness: 0.58,
-  metalness: 0.08
+  roughness: 0.38,
+  metalness: 0.16
 });
 const whitePieceMaterial = new THREE.MeshStandardMaterial({
   color: colors.whitePiece,
@@ -694,10 +700,16 @@ function render() {
   const focusHold = hasCameraFocusTarget || performance.now() < focusHoldUntil;
   controls.autoRotate = !pointerDown && hoveredCellId === null && !focusHold && !state.gameOver;
   controls.update();
+  updateViewFillLight();
   renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
   renderer.setScissorTest(false);
   renderer.render(scene, camera);
   positionAxisWidget();
+}
+
+function updateViewFillLight() {
+  viewFillLight.position.copy(camera.position).normalize().multiplyScalar(4.8);
+  viewFillLight.target.updateMatrixWorld();
 }
 
 function positionAxisWidget() {
