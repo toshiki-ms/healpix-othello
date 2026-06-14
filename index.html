@@ -39,7 +39,10 @@
             <h1>HEALPix Othello</h1>
             <p id="resolutionLabel">NSIDE 2 / 48 cells</p>
           </div>
-          <button class="lang-toggle" id="languageToggle" type="button">JA</button>
+          <div class="title-actions">
+            <button class="panel-toggle" id="controlsToggle" type="button" aria-expanded="true" aria-controls="controlStack">Hide settings</button>
+            <button class="lang-toggle" id="languageToggle" type="button">JA</button>
+          </div>
         </div>
 
         <div class="score-strip" aria-live="polite">
@@ -54,7 +57,7 @@
           </div>
         </div>
 
-        <div class="control-stack">
+        <div class="control-stack" id="controlStack">
           <div class="actions">
             <button id="blackNpcToggle" type="button" aria-pressed="false">Black Human</button>
             <button id="whiteNpcToggle" type="button" aria-pressed="true">White NPC</button>
@@ -88,6 +91,7 @@
       <section class="net-panel" aria-label="HEALPix unfolded board">
         <div class="net-head">
           <span id="netTitle">Unfolded map</span>
+          <button class="panel-toggle net-toggle" id="netToggle" type="button" aria-expanded="true" aria-controls="netBoard">Hide</button>
         </div>
         <svg id="netBoard" role="img" aria-label="HEALPix unfolded board"></svg>
       </section>

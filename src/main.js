@@ -27,10 +27,14 @@ const blackNpcToggle = document.querySelector("#blackNpcToggle");
 const whiteNpcToggle = document.querySelector("#whiteNpcToggle");
 const passButton = document.querySelector("#passButton");
 const resetButton = document.querySelector("#resetButton");
+const controlStack = document.querySelector("#controlStack");
+const controlsToggle = document.querySelector("#controlsToggle");
 const languageToggle = document.querySelector("#languageToggle");
+const hud = document.querySelector(".hud");
 const netBoard = document.querySelector("#netBoard");
 const netPanel = document.querySelector(".net-panel");
 const netTitle = document.querySelector("#netTitle");
+const netToggle = document.querySelector("#netToggle");
 const blackDifficultyLabel = document.querySelector("#blackDifficultyLabel");
 const whiteDifficultyLabel = document.querySelector("#whiteDifficultyLabel");
 const difficultyGroup = document.querySelector(".difficulty");
@@ -84,6 +88,14 @@ const TRANSLATIONS = {
     newGame: "New",
     net: "Unfolded map",
     difficultyAria: "NPC difficulty by color",
+    showSettings: "Settings",
+    hideSettings: "Hide settings",
+    showSettingsLabel: "Show NPC and game settings",
+    hideSettingsLabel: "Hide NPC and game settings",
+    showMap: "Map",
+    hideMap: "Hide",
+    showMapLabel: "Show unfolded map",
+    hideMapLabel: "Hide unfolded map",
     switchLanguage: "JA",
     switchLanguageLabel: "Switch language to Japanese",
     difficulties: {
@@ -122,6 +134,14 @@ const TRANSLATIONS = {
     newGame: "新規",
     net: "展開図",
     difficultyAria: "色ごとのNPC難易度",
+    showSettings: "設定",
+    hideSettings: "設定を隠す",
+    showSettingsLabel: "NPCとゲーム設定を表示",
+    hideSettingsLabel: "NPCとゲーム設定を隠す",
+    showMap: "展開図",
+    hideMap: "隠す",
+    showMapLabel: "展開図を表示",
+    hideMapLabel: "展開図を隠す",
     switchLanguage: "EN",
     switchLanguageLabel: "表示言語を英語に切り替え",
     difficulties: {
@@ -190,6 +210,10 @@ let hintToken = 0;
 let pointerDown = null;
 let hasCameraFocusTarget = false;
 let focusHoldUntil = 0;
+const compactLayoutQuery = window.matchMedia("(max-width: 640px)");
+let controlsCollapsed = compactLayoutQuery.matches;
+let netCollapsed = compactLayoutQuery.matches;
+let panelChoiceChanged = false;
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -203,7 +227,7 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x363b3d, 4.1, 7.6);
 
 const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
-camera.position.set(0.2, 0.36, 3.35);
+camera.position.set(0.32, 0.55, 5.9);
 const cameraFocusTarget = new THREE.Vector3();
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -211,7 +235,7 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
 controls.minDistance = 2.15;
-controls.maxDistance = 6.2;
+controls.maxDistance = 8.6;
 controls.rotateSpeed = 0.62;
 controls.zoomSpeed = 0.55;
 controls.autoRotate = true;
@@ -302,8 +326,15 @@ whiteNpcToggle.addEventListener("click", () => toggleNpc(WHITE));
 passButton.addEventListener("click", requestPass);
 resetButton.addEventListener("click", resetGame);
 godHintButton.addEventListener("click", requestGodHint);
+controlsToggle.addEventListener("click", toggleControlsPanel);
 languageToggle.addEventListener("click", toggleLanguage);
+netToggle.addEventListener("click", toggleNetPanel);
 difficultyButtons.forEach((button) => button.addEventListener("click", setDifficulty));
+if (compactLayoutQuery.addEventListener) {
+  compactLayoutQuery.addEventListener("change", handleCompactLayoutChange);
+} else {
+  compactLayoutQuery.addListener(handleCompactLayoutChange);
+}
 
 function labels() {
   return TRANSLATIONS[currentLanguage];
@@ -327,10 +358,48 @@ function applyLanguage() {
   languageToggle.textContent = text.switchLanguage;
   languageToggle.setAttribute("aria-label", text.switchLanguageLabel);
   difficultyGroup.setAttribute("aria-label", text.difficultyAria);
+  updatePanelVisibility();
 
   for (const button of difficultyButtons) {
     button.textContent = text.difficulties[button.dataset.difficulty];
   }
+}
+
+function updatePanelVisibility() {
+  const text = labels();
+  hud.classList.toggle("controls-collapsed", controlsCollapsed);
+  controlStack.hidden = controlsCollapsed;
+  controlsToggle.setAttribute("aria-expanded", String(!controlsCollapsed));
+  controlsToggle.textContent = controlsCollapsed ? text.showSettings : text.hideSettings;
+  controlsToggle.setAttribute("aria-label", controlsCollapsed ? text.showSettingsLabel : text.hideSettingsLabel);
+
+  netPanel.classList.toggle("collapsed", netCollapsed);
+  netBoard.setAttribute("aria-hidden", String(netCollapsed));
+  netToggle.setAttribute("aria-expanded", String(!netCollapsed));
+  netToggle.textContent = netCollapsed ? text.showMap : text.hideMap;
+  netToggle.setAttribute("aria-label", netCollapsed ? text.showMapLabel : text.hideMapLabel);
+}
+
+function toggleControlsPanel() {
+  panelChoiceChanged = true;
+  controlsCollapsed = !controlsCollapsed;
+  updatePanelVisibility();
+}
+
+function toggleNetPanel() {
+  panelChoiceChanged = true;
+  netCollapsed = !netCollapsed;
+  updatePanelVisibility();
+}
+
+function handleCompactLayoutChange(event) {
+  if (panelChoiceChanged) {
+    return;
+  }
+
+  controlsCollapsed = event.matches;
+  netCollapsed = event.matches;
+  updatePanelVisibility();
 }
 
 function toggleLanguage() {
