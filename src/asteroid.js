@@ -126,9 +126,9 @@ const BURN_ASH_PER_FUEL = 0.12;
 const BURNING_MARKER_THRESHOLD = 0.03;
 const BURN_INTENSITY_MAX = 2.4;
 const BURN_INTENSITY_STACK_BOOST = 0.48;
-const EARTH_ROSE_BURN_FUEL_FACTOR = 0.08;
-const EARTH_ROSE_BURN_HEAT_FUEL_FACTOR = 0.025;
-const EARTH_ROSE_BURN_RATE_MULTIPLIER = 2.8;
+const EARTH_ROSE_BURN_FUEL_FACTOR = 0.24;
+const EARTH_ROSE_BURN_HEAT_FUEL_FACTOR = 0.045;
+const EARTH_ROSE_BURN_RATE_MULTIPLIER = 8.0;
 const DISCHARGE_FIRE_COOLING = 0.78;
 const DISCHARGE_FIRE_FUEL_REDUCTION = 0.58;
 const DISCHARGE_FIRE_CLEAR_INTENSITY = 0.28;
@@ -1187,6 +1187,9 @@ let previousNetHoverId = null;
 let previousNetFocusId = null;
 const scheduledWaterCells = new Set();
 let scaledVolcanicAshFallRate = new Float32Array(0);
+let renderDirty = true;
+let renderActiveUntil = 0;
+let lastRenderAt = 0;
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -1220,6 +1223,15 @@ controls.rotateSpeed = 0.62;
 controls.zoomSpeed = 0.55;
 controls.autoRotate = false;
 controls.autoRotateSpeed = 0.16;
+controls.addEventListener("start", () => {
+  renderActiveUntil = Number.POSITIVE_INFINITY;
+  renderDirty = true;
+});
+controls.addEventListener("change", () => invalidateRender(240));
+controls.addEventListener("end", () => {
+  renderActiveUntil = performance.now() + 520;
+  renderDirty = true;
+});
 
 const ambient = new THREE.HemisphereLight(0xe7edf5, 0x181d21, 1.22);
 scene.add(ambient);
@@ -4204,7 +4216,7 @@ function computeSunDirectionForCellAt(progress, cellId, out, normalOut, eastOut)
 }
 
 function computeRoseSunDirectionAt(progress, targetState, out, normalOut, eastOut) {
-  return computeSunDirectionForCellAt(progress, targetState.roseCell, out, normalOut, eastOut);
+  return computeSunDirectionForCellAt(progress, solarReferenceCellIdForState(targetState), out, normalOut, eastOut);
 }
 
 function updateRoseSunDirection(progress, targetState = state) {
@@ -4213,9 +4225,10 @@ function updateRoseSunDirection(progress, targetState = state) {
 
 function updateSunlightField(targetState = state, modelTimeOffsetDays = 0, modelDurationDays = VISIBLE_SUNLIGHT_DURATION_DAYS, updateVisible = true) {
   const simulationSunlight = targetState.vegetation?.state?.sunlight ?? targetState.sunlight;
+  const referenceCellId = solarReferenceCellIdForState(targetState);
   if (
     !runWasmSunlightField(sunlightCellNormals, simulationSunlight, {
-      roseCell: targetState.roseCell,
+      roseCell: referenceCellId,
       turn: targetState.turn,
       turnsPerDay: TURNS_PER_DAY,
       modelTimeOffsetDays,
@@ -4228,7 +4241,7 @@ function updateSunlightField(targetState = state, modelTimeOffsetDays = 0, model
   if (updateVisible && simulationSunlight !== targetState.sunlight) {
     if (
       !runWasmSunlightField(sunlightCellNormals, targetState.sunlight, {
-        roseCell: targetState.roseCell,
+        roseCell: referenceCellId,
         turn: targetState.turn,
         turnsPerDay: TURNS_PER_DAY,
         modelTimeOffsetDays,
@@ -5695,6 +5708,7 @@ function refresh(nextMessage = null) {
     message.textContent = nextMessage;
   }
   markRefreshProfile("message");
+  invalidateRender(420);
   if (profileSink && profileStart) {
     addAsteroidProfileTime(profileSink, "refresh:total", performance.now() - profileStart);
   }
@@ -8078,7 +8092,10 @@ function igniteBurnAround(cellId, work = BURN_WORK, targetCells = burnTargetCell
     }
 
     const wetness = Math.max(state.topSoilWater[target.cellId] ?? 0, state.moisture[target.cellId] ?? 0, state.snowIce?.[target.cellId] ?? 0);
-    if (state.terrain[target.cellId] === "water" || wetness > 0.78) {
+    const directEarthRose = state.planetPreset === "earth" &&
+      target.cellId === cellId &&
+      roseDisplayMassIndex(target.cellId) > EARTH_ROSE_PULL_THRESHOLD;
+    if (state.terrain[target.cellId] === "water" || (!directEarthRose && wetness > 0.78)) {
       result.wetBlocked = true;
       continue;
     }
@@ -8087,12 +8104,17 @@ function igniteBurnAround(cellId, work = BURN_WORK, targetCells = burnTargetCell
       continue;
     }
 
-    const dryness = clamp01((0.82 - wetness) / 0.52);
+    const dryness = directEarthRose
+      ? Math.max(0.42, clamp01((0.82 - wetness) / 0.52))
+      : clamp01((0.82 - wetness) / 0.52);
+    const roseFuel = state.planetPreset === "earth"
+      ? Math.min(0.42, roseDisplayMassIndex(target.cellId)) * 1.05
+      : Math.min(0.22, state.flower[target.cellId] ?? 0) * 0.24;
     const fuel =
       (modelState.baobabSeed?.[target.cellId] ?? 0) * 1.9 +
       Math.min(0.34, baobabDisplayMassAt(target.cellId)) * 0.9 +
       (modelState.roseSeed?.[target.cellId] ?? 0) * 1.9 +
-      Math.min(0.22, state.flower[target.cellId] ?? 0) * 0.24;
+      roseFuel;
     if (dryness <= 0.02 || fuel <= 0.002) {
       if (dryness <= 0.02) {
         result.wetBlocked = true;
@@ -8210,7 +8232,10 @@ function burnAround(cellId, work = BURN_WORK, targetCells = burnTargetCells(cell
     }
 
     const wetness = Math.max(state.topSoilWater[target.cellId] ?? 0, state.moisture[target.cellId] ?? 0, state.snowIce?.[target.cellId] ?? 0);
-    if (state.terrain[target.cellId] === "water" || wetness > 0.78) {
+    const directEarthRose = state.planetPreset === "earth" &&
+      target.cellId === cellId &&
+      roseDisplayMassIndex(target.cellId) > EARTH_ROSE_PULL_THRESHOLD;
+    if (state.terrain[target.cellId] === "water" || (!directEarthRose && wetness > 0.78)) {
       result.wetBlocked = true;
       continue;
     }
@@ -8219,12 +8244,17 @@ function burnAround(cellId, work = BURN_WORK, targetCells = burnTargetCells(cell
       continue;
     }
 
-    const dryness = clamp01((0.82 - wetness) / 0.52);
+    const dryness = directEarthRose
+      ? Math.max(0.42, clamp01((0.82 - wetness) / 0.52))
+      : clamp01((0.82 - wetness) / 0.52);
+    const roseFuel = state.planetPreset === "earth"
+      ? Math.min(0.42, roseDisplayMassIndex(target.cellId)) * 1.05
+      : Math.min(0.22, state.flower[target.cellId] ?? 0) * 0.24;
     const fuel =
       (modelState.baobabSeed?.[target.cellId] ?? 0) * 1.9 +
       Math.min(0.34, baobabDisplayMassAt(target.cellId)) * 0.9 +
       (modelState.roseSeed?.[target.cellId] ?? 0) * 1.9 +
-      Math.min(0.22, state.flower[target.cellId] ?? 0) * 0.24;
+      roseFuel;
     if (dryness <= 0.02 || fuel <= 0.002) {
       if (dryness <= 0.02) {
         result.wetBlocked = true;
@@ -8354,10 +8384,13 @@ function advanceBurningPeriod(dtDays) {
       }
       state.burning[cellId] = intensity;
     }
-    const wetness = Math.max(state.topSoilWater[cellId] ?? 0, state.moisture[cellId] ?? 0, state.snowIce?.[cellId] ?? 0);
-    const dryness = clamp01((0.86 - wetness) / 0.58);
     const burnIntensity = Math.min(BURN_INTENSITY_MAX, intensity);
     const burnsEarthRose = state.planetPreset === "earth" && (state.burnRoseTarget[cellId] ?? 0) > 0;
+    const wetness = Math.max(state.topSoilWater[cellId] ?? 0, state.moisture[cellId] ?? 0, state.snowIce?.[cellId] ?? 0);
+    const dryness = burnsEarthRose
+      ? Math.max(0.5, clamp01((0.86 - wetness) / 0.58))
+      : clamp01((0.86 - wetness) / 0.58);
+    const burnedFractionBefore = clamp01(1 - fuel / initialFuel);
     const burnRate = BURN_FUEL_CONSUMPTION_PER_DAY *
       (0.55 + burnIntensity * 0.7) *
       (0.45 + dryness * 0.9) *
@@ -8370,6 +8403,10 @@ function advanceBurningPeriod(dtDays) {
 
     state.burnFuel[cellId] = Math.max(0, fuel - consumed);
     const burnedFraction = clamp01(1 - state.burnFuel[cellId] / initialFuel);
+    const burnedFractionDelta = Math.max(0, burnedFraction - burnedFractionBefore);
+    if (burnsEarthRose && burnedFractionDelta > 1e-6) {
+      burnRoseCarbon(cellId, (state.burnRoseTarget[cellId] ?? 0) * burnedFractionDelta);
+    }
     const ashGenerated = consumed * BURN_ASH_PER_FUEL;
     if (ashGenerated > 0) {
       spreadBurnAsh(cellId, ashGenerated);
@@ -9319,9 +9356,13 @@ function focusCameraOnSunset(holdMs = 5200) {
 
   computeSunDirectionForCellAt(turnProgress(), sunsetReferenceCellId(), sunDirection, sunRoseNormal, sunEastAxis);
   const referenceNormal = vectorForCell(referenceCell);
-  sunsetViewDirection.copy(sunDirection).addScaledVector(referenceNormal, -sunDirection.dot(referenceNormal));
+  if (state.planetPreset === "earth") {
+    sunsetViewDirection.copy(sunEastAxis).multiplyScalar(-1);
+  } else {
+    sunsetViewDirection.copy(sunDirection).addScaledVector(referenceNormal, -sunDirection.dot(referenceNormal));
+  }
   if (sunsetViewDirection.lengthSq() < 0.0001) {
-    sunsetViewDirection.copy(sunEastAxis);
+    sunsetViewDirection.copy(sunEastAxis).multiplyScalar(state.planetPreset === "earth" ? -1 : 1);
   }
   sunsetViewDirection.normalize();
 
@@ -9334,6 +9375,7 @@ function focusCameraOnSunset(holdMs = 5200) {
   cameraFocusTarget.copy(sunsetViewPosition);
   hasCameraFocusTarget = true;
   focusHoldUntil = performance.now() + holdMs;
+  invalidateRender(holdMs);
 }
 
 function sunsetReferenceCellId() {
@@ -9342,6 +9384,14 @@ function sunsetReferenceCellId() {
   }
 
   return state.roseCell;
+}
+
+function solarReferenceCellIdForState(targetState = state) {
+  if (targetState.planetPreset === "earth" && targetState.crashCell !== null && targetState.crashCell !== undefined) {
+    return targetState.crashCell;
+  }
+
+  return targetState.roseCell;
 }
 
 function turnsUntilNextSunset() {
@@ -9590,7 +9640,7 @@ async function runEcosystemSteps(modelDtDays, repeatCount) {
     modelDtDays,
     slowStepInterval: defaultSlowStepInterval,
     sunlightNormals: sunlightCellNormals,
-    sunlightRoseCell: state.roseCell,
+    sunlightRoseCell: solarReferenceCellIdForState(state),
     sunlightTurn: state.turn,
     sunlightTurnsPerDay: TURNS_PER_DAY,
     sunlightModelTimeOffsetDays: 0,
@@ -10518,6 +10568,7 @@ function focusCameraOnCell(cellId) {
   hasCameraFocusTarget = false;
   focusHoldUntil = 0;
   controls.update();
+  invalidateRender(420);
 }
 
 function nudgeCameraTowardCell(cellId, holdMs = 1300) {
@@ -10534,6 +10585,7 @@ function nudgeCameraTowardCell(cellId, holdMs = 1300) {
   controls.target.set(0, 0, 0);
   hasCameraFocusTarget = true;
   focusHoldUntil = performance.now() + holdMs;
+  invalidateRender(holdMs);
 }
 
 function updateLocatorMarker() {
@@ -10589,6 +10641,13 @@ function render() {
   updateSunMarkerPosition();
 }
 
+function invalidateRender(activeMs = 180) {
+  renderDirty = true;
+  if (Number.isFinite(activeMs) && activeMs > 0) {
+    renderActiveUntil = Math.max(renderActiveUntil, performance.now() + activeMs);
+  }
+}
+
 function updateLodObjectMarkersForCamera() {
   if (!isRenderLodActive()) {
     if (lastLocalLodOverlayKey !== null) {
@@ -10633,8 +10692,15 @@ function detailCameraLodBucket() {
   ].join(",");
 }
 
-function renderLoop() {
-  render();
+function renderLoop(now = performance.now()) {
+  const focusActive = hasCameraFocusTarget || now < focusHoldUntil;
+  const interactionActive = now < renderActiveUntil;
+  const periodicRefreshDue = now - lastRenderAt > 1000;
+  if (renderDirty || focusActive || interactionActive || periodicRefreshDue) {
+    render();
+    renderDirty = false;
+    lastRenderAt = now;
+  }
   window.requestAnimationFrame(renderLoop);
 }
 
@@ -10780,6 +10846,7 @@ function resize() {
   camera.updateProjectionMatrix();
   netCanvasSizeDirty = true;
   drawNetBoard();
+  invalidateRender(520);
 }
 
 function onPointerDown(event) {
@@ -10791,6 +10858,7 @@ function onPointerDown(event) {
   };
   hasCameraFocusTarget = false;
   focusHoldUntil = 0;
+  invalidateRender(900);
 }
 
 function onPointerMove(event) {

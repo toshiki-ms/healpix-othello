@@ -512,11 +512,32 @@ p {
   width: min(100%, 46rem);
 }
 
-.asteroid-actions {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+.asteroid-hud,
+.asteroid-status,
+.asteroid-event-log,
+.net-panel,
+.colorbar-panel {
+  backdrop-filter: none;
 }
 
-.asteroid-actions select {
+.asteroid-actions {
+  grid-template-columns: 1fr;
+}
+
+.asteroid-selectors {
+  display: grid;
+  grid-template-columns: minmax(5.8rem, 0.78fr) minmax(4.7rem, 0.58fr) minmax(10rem, 1.8fr) minmax(4.6rem, 0.58fr);
+  gap: 0.45rem;
+}
+
+.asteroid-command-bar {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.asteroid-actions select,
+.asteroid-command-bar button {
   min-height: 2.4rem;
   width: 100%;
   padding-inline: 0.35rem;
@@ -1124,6 +1145,9 @@ p {
 
   .asteroid-hud {
     grid-template-columns: 1fr;
+    max-height: calc(100dvh - 5.4rem);
+    overflow: hidden auto;
+    backdrop-filter: none;
   }
 
   .asteroid-meters {
@@ -1131,7 +1155,54 @@ p {
   }
 
   .asteroid-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .asteroid-selectors {
+    grid-template-columns: minmax(0, 1fr) minmax(4.6rem, 0.6fr) minmax(4.5rem, 0.58fr);
+    gap: 0.35rem;
+  }
+
+  #asteroidViewSelect {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  #colorbarToggle {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .asteroid-command-bar {
+    position: fixed;
+    right: max(0.65rem, env(safe-area-inset-right));
+    bottom: max(0.55rem, env(safe-area-inset-bottom));
+    left: max(0.65rem, env(safe-area-inset-left));
+    z-index: 5;
+    display: flex;
+    gap: 0.35rem;
+    padding: 0.42rem;
+    overflow-x: auto;
+    border: 1px solid rgba(240, 239, 232, 0.16);
+    border-radius: 8px;
+    background: rgba(13, 16, 19, 0.84);
+    box-shadow: 0 0.7rem 1.8rem rgba(0, 0, 0, 0.32);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    backdrop-filter: blur(16px);
+  }
+
+  .asteroid-command-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .asteroid-command-bar button {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 4.15rem;
+    min-height: 2.25rem;
+    padding-inline: 0.62rem;
+    font-size: 0.78rem;
   }
 
   .simulation-controls {
@@ -1146,6 +1217,10 @@ p {
     bottom: max(7.3rem, env(safe-area-inset-bottom));
     left: 50%;
     max-width: min(28rem, calc(100vw - 2rem));
+    max-height: 4.6rem;
+    overflow: auto;
+    padding: 0.52rem 0.72rem;
+    font-size: 0.82rem;
     transform: translateX(-50%);
   }
 
@@ -1166,7 +1241,7 @@ p {
 
   .net-panel {
     right: 1rem;
-    bottom: 4.35rem;
+    bottom: max(4.35rem, calc(env(safe-area-inset-bottom) + 4.25rem));
     left: 1rem;
     width: auto;
     min-width: 0;
@@ -1206,7 +1281,20 @@ p {
   }
 
   .asteroid-meters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.3rem;
+  }
+
+  .asteroid-meter {
+    min-height: 2rem;
+  }
+
+  .asteroid-meter span {
+    font-size: 0.58rem;
+  }
+
+  .asteroid-meter strong {
+    font-size: 0.82rem;
   }
 
   button,
@@ -1219,7 +1307,7 @@ p {
 
   .net-panel {
     right: 0.55rem;
-    bottom: 4rem;
+    bottom: max(4rem, calc(env(safe-area-inset-bottom) + 4.05rem));
     left: 0.55rem;
     padding: 0.55rem;
   }
@@ -1232,5 +1320,29 @@ p {
   .colorbar-panel {
     right: 0.55rem;
     left: 0.55rem;
+  }
+
+  .asteroid-selectors {
+    grid-template-columns: minmax(0, 1fr) minmax(4.2rem, 0.58fr) minmax(4.1rem, 0.55fr);
+  }
+
+  .asteroid-command-bar {
+    right: max(0.45rem, env(safe-area-inset-right));
+    bottom: max(0.45rem, env(safe-area-inset-bottom));
+    left: max(0.45rem, env(safe-area-inset-left));
+    padding: 0.35rem;
+  }
+
+  .asteroid-command-bar button {
+    min-width: 3.85rem;
+    min-height: 2.15rem;
+    padding-inline: 0.52rem;
+    font-size: 0.74rem;
+  }
+
+  .asteroid-status {
+    bottom: max(7rem, calc(env(safe-area-inset-bottom) + 6.6rem));
+    max-height: 4.2rem;
+    font-size: 0.78rem;
   }
 }

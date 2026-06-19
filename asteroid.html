@@ -68,73 +68,77 @@
 
         <div class="control-stack asteroid-control-stack" id="controlStack">
           <div class="actions asteroid-actions">
-            <select id="asteroidPlanetSelect" aria-label="Planet preset">
-              <option value="asteroid">Asteroid</option>
-              <option value="earth">Earth</option>
-            </select>
-            <select id="asteroidNsideSelect" aria-label="NSIDE">
-              <option value="2">NS 2</option>
-              <option value="4">NS 4</option>
-              <option value="8">NS 8</option>
-              <option value="16">NS 16</option>
-              <option value="32">NS 32</option>
-              <option value="64">NS 64</option>
-            </select>
-            <select id="asteroidViewSelect" aria-label="View layer">
-              <optgroup data-view-group="land" label="Land">
-                <option value="landUse">Land use</option>
-                <option value="substrate">Substrate</option>
-                <option value="elevation">Terrain height</option>
-              </optgroup>
-              <optgroup data-view-group="soil" label="Soil nutrients and carbon">
-                <option value="soilNutrient">Mineral nutrients</option>
-                <option value="soilCarbon">Soil organic carbon</option>
-                <option value="carbonBudget">Carbon flux</option>
-              </optgroup>
-              <optgroup data-view-group="water" label="Hydrology">
-                <option value="surfaceWater">Surface ponding</option>
-                <option value="topSoilWater">Soil water: upper layer</option>
-                <option value="midSoilWater">Soil water: middle layer</option>
-                <option value="deepSoilWater">Soil water: lower layer</option>
-                <option value="topSoilHead">Soil water head: upper</option>
-                <option value="midSoilHead">Soil water head: middle</option>
-                <option value="deepSoilHead">Soil water head: lower</option>
-                <option value="topSoilK">Hydraulic conductivity: upper</option>
-                <option value="midSoilK">Hydraulic conductivity: middle</option>
-                <option value="deepSoilK">Hydraulic conductivity: lower</option>
-                <option value="groundwater">Groundwater storage</option>
-                <option value="groundwaterHead">Groundwater hydraulic head</option>
-                <option value="waterPotential">Soil water potential: upper</option>
-                <option value="rootStress">Root water availability</option>
-                <option value="waterBudget">Water movement</option>
-                <option value="snowIce">Snow and ice</option>
-              </optgroup>
-              <optgroup data-view-group="weather" label="Weather and light">
-                <option value="rainfall">Rain</option>
-                <option value="cloudCover">Cloud cover</option>
-                <option value="meanTemp">Mean temperature</option>
-                <option value="koppen">Köppen climate</option>
-                <option value="sunlight">Sunlight</option>
-                <option value="apar">Absorbed PAR</option>
-              </optgroup>
-              <optgroup data-view-group="vegetation" label="Vegetation">
-                <option value="leafArea">Leaf area</option>
-                <option value="vegetation">Vegetation</option>
-                <option value="seedBank">Seed bank</option>
-                <option value="height">Plant height</option>
-              </optgroup>
-            </select>
-            <button class="colorbar-toggle" id="colorbarToggle" type="button" aria-pressed="false">Scale</button>
-            <button id="waterButton" type="button">Water</button>
-            <button id="releaseWaterButton" type="button">Release</button>
-            <button id="pullButton" type="button">Pull</button>
-            <button id="burnButton" type="button">Burn</button>
-            <button id="cleanButton" type="button">Clean</button>
-            <button id="observeButton" type="button">Observe</button>
-            <button id="sunsetButton" type="button">Sunset</button>
-            <button id="restButton" type="button">Rest</button>
-            <button id="endDayButton" type="button">Wait</button>
-            <button id="resetButton" type="button">New</button>
+            <div class="asteroid-selectors">
+              <select id="asteroidPlanetSelect" aria-label="Planet preset">
+                <option value="asteroid">Asteroid</option>
+                <option value="earth">Earth</option>
+              </select>
+              <select id="asteroidNsideSelect" aria-label="NSIDE">
+                <option value="2">NS 2</option>
+                <option value="4">NS 4</option>
+                <option value="8">NS 8</option>
+                <option value="16">NS 16</option>
+                <option value="32">NS 32</option>
+                <option value="64">NS 64</option>
+              </select>
+              <select id="asteroidViewSelect" aria-label="View layer">
+                <optgroup data-view-group="land" label="Land">
+                  <option value="landUse">Land use</option>
+                  <option value="substrate">Substrate</option>
+                  <option value="elevation">Terrain height</option>
+                </optgroup>
+                <optgroup data-view-group="soil" label="Soil nutrients and carbon">
+                  <option value="soilNutrient">Mineral nutrients</option>
+                  <option value="soilCarbon">Soil organic carbon</option>
+                  <option value="carbonBudget">Carbon flux</option>
+                </optgroup>
+                <optgroup data-view-group="water" label="Hydrology">
+                  <option value="surfaceWater">Surface ponding</option>
+                  <option value="topSoilWater">Soil water: upper layer</option>
+                  <option value="midSoilWater">Soil water: middle layer</option>
+                  <option value="deepSoilWater">Soil water: lower layer</option>
+                  <option value="topSoilHead">Soil water head: upper</option>
+                  <option value="midSoilHead">Soil water head: middle</option>
+                  <option value="deepSoilHead">Soil water head: lower</option>
+                  <option value="topSoilK">Hydraulic conductivity: upper</option>
+                  <option value="midSoilK">Hydraulic conductivity: middle</option>
+                  <option value="deepSoilK">Hydraulic conductivity: lower</option>
+                  <option value="groundwater">Groundwater storage</option>
+                  <option value="groundwaterHead">Groundwater hydraulic head</option>
+                  <option value="waterPotential">Soil water potential: upper</option>
+                  <option value="rootStress">Root water availability</option>
+                  <option value="waterBudget">Water movement</option>
+                  <option value="snowIce">Snow and ice</option>
+                </optgroup>
+                <optgroup data-view-group="weather" label="Weather and light">
+                  <option value="rainfall">Rain</option>
+                  <option value="cloudCover">Cloud cover</option>
+                  <option value="meanTemp">Mean temperature</option>
+                  <option value="koppen">Köppen climate</option>
+                  <option value="sunlight">Sunlight</option>
+                  <option value="apar">Absorbed PAR</option>
+                </optgroup>
+                <optgroup data-view-group="vegetation" label="Vegetation">
+                  <option value="leafArea">Leaf area</option>
+                  <option value="vegetation">Vegetation</option>
+                  <option value="seedBank">Seed bank</option>
+                  <option value="height">Plant height</option>
+                </optgroup>
+              </select>
+              <button class="colorbar-toggle" id="colorbarToggle" type="button" aria-pressed="false">Scale</button>
+            </div>
+            <div class="asteroid-command-bar" aria-label="Garden actions">
+              <button id="waterButton" type="button">Water</button>
+              <button id="releaseWaterButton" type="button">Release</button>
+              <button id="pullButton" type="button">Pull</button>
+              <button id="burnButton" type="button">Burn</button>
+              <button id="cleanButton" type="button">Clean</button>
+              <button id="observeButton" type="button">Observe</button>
+              <button id="sunsetButton" type="button">Sunset</button>
+              <button id="restButton" type="button">Rest</button>
+              <button id="endDayButton" type="button">Wait</button>
+              <button id="resetButton" type="button">New</button>
+            </div>
           </div>
           <div class="simulation-controls" id="simulationControls">
             <label>
