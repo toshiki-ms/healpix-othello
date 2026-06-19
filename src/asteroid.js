@@ -192,7 +192,8 @@ const EARTH_MAX_NSIDE = IS_VITE_DEV ? 256 : 64;
 const MOBILE_MAX_NSIDE = 64;
 const BASE_SUPPORTED_NSIDES = Object.freeze([2, 4, 8, 16, 32, 64]);
 const LOCAL_HIGH_RES_NSIDES = Object.freeze(IS_VITE_DEV ? [128, 256] : []);
-const compactLayoutQuery = window.matchMedia("(max-width: 640px)");
+const compactLayoutQuery = window.matchMedia("(max-width: 640px), (orientation: portrait)");
+const mobileCapabilityQuery = window.matchMedia("(max-width: 640px) and (pointer: coarse)");
 const hierarchyObjectTopology = createHealpixTopology(HIERARCHY_OBJECT_NSIDE);
 const hierarchyObjectCellByKey = new Map(
   hierarchyObjectTopology.cells.map((cell) => [`${cell.face}:${cell.ix}:${cell.iy}`, cell])
@@ -231,7 +232,7 @@ let renderCellRepresentativeIds = new Int32Array(0);
 
 function maxNsideForPreset(preset) {
   const presetMaxNside = preset === "asteroid" ? ASTEROID_MAX_NSIDE : EARTH_MAX_NSIDE;
-  return compactLayoutQuery.matches ? Math.min(presetMaxNside, MOBILE_MAX_NSIDE) : presetMaxNside;
+  return mobileCapabilityQuery.matches ? Math.min(presetMaxNside, MOBILE_MAX_NSIDE) : presetMaxNside;
 }
 
 function minNsideForPreset(preset) {

@@ -1102,7 +1102,7 @@ p {
   fill: #536f35;
 }
 
-@media (max-width: 840px) {
+@media (max-width: 840px), (orientation: portrait) {
   .game-cards {
     grid-template-columns: 1fr;
   }
@@ -1217,10 +1217,11 @@ p {
     bottom: max(7.3rem, env(safe-area-inset-bottom));
     left: 50%;
     max-width: min(28rem, calc(100vw - 2rem));
-    max-height: 4.6rem;
+    max-height: min(34dvh, 11rem);
     overflow: auto;
     padding: 0.52rem 0.72rem;
     font-size: 0.82rem;
+    line-height: 1.36;
     transform: translateX(-50%);
   }
 
@@ -1232,11 +1233,7 @@ p {
   }
 
   .asteroid-event-log {
-    right: 1rem;
-    bottom: max(10.2rem, calc(env(safe-area-inset-bottom) + 7.9rem));
-    left: 1rem;
-    width: auto;
-    max-height: 4.8rem;
+    display: none;
   }
 
   .net-panel {
@@ -1342,7 +1339,7 @@ p {
 
   .asteroid-status {
     bottom: max(7rem, calc(env(safe-area-inset-bottom) + 6.6rem));
-    max-height: 4.2rem;
+    max-height: min(34dvh, 10.5rem);
     font-size: 0.78rem;
   }
 }
