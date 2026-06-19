@@ -629,11 +629,11 @@ const TRANSLATIONS = {
     burnedRose: "The fire reached the rose ground. That may be too much.",
     burnedProtectedRose: "Your hand stops. This is not fuel for a controlled burn.",
     burnedEarthRose: "The rose burned quickly, leaving only a trace of ash.",
-    cleaned: "You brushed away the volcanic ash and worked it back into the soil.",
-    cleanedPatch: "You brushed away a thin spread of volcanic ash and returned it to the soil.",
-    cleanedHeavy: "You worked through the thick volcanic ash and returned what you could to the soil. Some ash still remains.",
+    cleaned: "You brushed away the ash and worked it back into the soil.",
+    cleanedPatch: "You brushed away a thin spread of ash and returned it to the soil.",
+    cleanedHeavy: "You worked through the thick ash and returned what you could to the soil. Some ash still remains.",
     cleanedSnowIce: "You cleared snow and surface ice, exposing the ground.",
-    cleanedAshAndSnowIce: "You cleared volcanic ash, snow, and surface ice from the ground.",
+    cleanedAshAndSnowIce: "You cleared ash, snow, and surface ice from the ground.",
     sunsetMemory: "You watched the sunset and kept the color in memory.",
     sunsetCloudy: "The weather was poor today, and the sunset could not be seen.",
     restMessage: (duration) => `You rested and let ${duration} pass.`,
@@ -918,11 +918,11 @@ const TRANSLATIONS = {
     burnedRose: "火がバラの地面にも触れた。少しやりすぎかもしれない。",
     burnedProtectedRose: "手が止まった。この花は、火入れで燃やすものではない。",
     burnedEarthRose: "地球のバラはすぐに燃え、灰だけが少し残った。",
-    cleaned: "火山灰を払い、土に戻した。",
-    cleanedPatch: "薄く広がった火山灰をまとめて払い、土に戻した。",
-    cleanedHeavy: "厚く積もった火山灰を削るように払い、土に戻した。まだ少し残っている。",
+    cleaned: "灰を払い、土に戻した。",
+    cleanedPatch: "薄く広がった灰をまとめて払い、土に戻した。",
+    cleanedHeavy: "厚く積もった灰を削るように払い、土に戻した。まだ少し残っている。",
     cleanedSnowIce: "雪と表層の氷を払い、地面を少し出した。",
-    cleanedAshAndSnowIce: "火山灰と雪氷を払い、地面を少し出した。",
+    cleanedAshAndSnowIce: "灰と雪氷を払い、地面を少し出した。",
     sunsetMemory: "夕日を見て、その色を記憶に残した。",
     sunsetCloudy: "今日は天気が悪くて夕日が見れない。",
     restMessage: (duration) => `休んで、${duration}ぶん時間が進んだ。`,
@@ -9662,17 +9662,23 @@ function recordEcosystemEvents() {
       ? state.maxBaobab
       : state.baobab.reduce((maximum, value) => Math.max(maximum, value), 0);
 
-  if (maxRain > 1.6 && state.lastRainEventKey !== eventKey) {
+  if (state.planetPreset !== "earth" && maxRain > 1.6 && state.lastRainEventKey !== eventKey) {
     addEventLogEntry(text.eventRain);
     state.lastRainEventKey = eventKey;
   }
 
-  if (!state.roseWitheredNotified && primaryRosePlantMass() > 0.025 && state.roseHealth < 0.38 && state.lastRoseWeakEventDay !== state.day) {
+  if (
+    state.planetPreset !== "earth" &&
+    !state.roseWitheredNotified &&
+    primaryRosePlantMass() > 0.025 &&
+    state.roseHealth < 0.38 &&
+    state.lastRoseWeakEventDay !== state.day
+  ) {
     addEventLogEntry(text.eventRoseWeak);
     state.lastRoseWeakEventDay = state.day;
   }
 
-  if (maxBaobab > 0.62 && state.lastBaobabEventDay !== state.day) {
+  if (state.planetPreset !== "earth" && maxBaobab > 0.62 && state.lastBaobabEventDay !== state.day) {
     addEventLogEntry(text.eventBaobabLarge);
     state.lastBaobabEventDay = state.day;
   }
