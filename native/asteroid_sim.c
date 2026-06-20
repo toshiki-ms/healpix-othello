@@ -15,6 +15,8 @@
 #define SIM_BAOBAB_SEED_NPP_ALLOCATION_FRACTION 0.45f
 #define SIM_BAOBAB_SEED_STORE_FRACTION_PER_DAY 0.32f
 #define SIM_ROSE_SEED_NPP_ALLOCATION_FRACTION 0.38f
+#define SIM_BAOBAB_GERMINATION_RESPIRATION_FRACTION 0.08f
+#define SIM_ROSE_GERMINATION_RESPIRATION_FRACTION 0.08f
 #define SIM_ROSE_SEED_STORE_FRACTION_PER_DAY 0.18f
 #define SIM_ROSE_SEED_PRODUCTION_COEFF 0.03f
 #define SIM_ROSE_SEED_BASE_MORTALITY 0.0035f
@@ -6644,6 +6646,7 @@ static void sim_update_plant_carbon_seeds_impl(
   uintptr_t soil_mineral_n_next_offset,
   int32_t write_diagnostics
 ) {
+  (void)write_diagnostics;
   const int32_t *SIM_RESTRICT active_ids = (const int32_t *)(uintptr_t)active_ids_offset;
   const float *SIM_RESTRICT baobab_respiration_q10 = (const float *)(uintptr_t)baobab_respiration_q10_offset;
   const float *SIM_RESTRICT rose_respiration_q10 = (const float *)(uintptr_t)rose_respiration_q10_offset;
@@ -6819,6 +6822,7 @@ static void sim_update_plant_carbon_seeds_impl(
     float gpp_b = 0.0f;
     float b_seed_death = 0.0f;
     float seed_b = 0.0f;
+    float b_failed_seed = 0.0f;
     float b_litter_fast = 0.0f;
     float b_litter_slow = 0.0f;
     float b_litter_total = 0.0f;
@@ -6838,17 +6842,29 @@ static void sim_update_plant_carbon_seeds_impl(
       baobab_store_next[i] = 0.0f;
       baobab_seed_next[i] = 0.0f;
     } else if (!has_baobab_adult) {
-      const float b_germ_flux = baobab_seed[i] *
+      const float baobab_seed_input = baobab_seed_transport[i];
+      const float effective_b_seed_pool = baobab_seed[i] + baobab_seed_input * model_dt_days;
+      const float b_germ_flux = effective_b_seed_pool *
         sim_baobab_germination_rate(wetness, temp_stress_b, light_baobab_stress, sub, next_b_readiness, baobab_risk[i], ash_stress_value, blocked);
       b_seed_death = (sim_seed_mortality_rate(wetness, temp_c, 0.0022f, 0.014f) +
         0.035f * sim_clamp((wetness - 0.68f) / 0.24f, 0.0f, 1.0f)) * baobab_seed[i];
-      seed_b = sim_min(baobab_seed[i] / model_dt_days, b_germ_flux);
+      seed_b = sim_min(baobab_seed[i] / model_dt_days + baobab_seed_input, b_germ_flux);
+      const float b_available_seed_removal = sim_max(0.0f, baobab_seed[i] / model_dt_days + baobab_seed_input);
+      const float b_seed_removal = seed_b + b_seed_death;
+      if (b_seed_removal > b_available_seed_removal && b_seed_removal > 0.0f) {
+        const float scale = b_available_seed_removal / b_seed_removal;
+        seed_b *= scale;
+        b_seed_death *= scale;
+      }
       baobab_seed_next[i] = sim_clamp(
-        baobab_seed[i] + model_dt_days * (baobab_seed_transport[i] - seed_b - b_seed_death),
+        baobab_seed[i] + model_dt_days * (baobab_seed_input - seed_b - b_seed_death),
         0.0f,
         0.7f
       );
-      const float seed_establishment = sim_max(0.0f, seed_b) * 0.26f;
+      const float germinated_seed = sim_max(0.0f, seed_b);
+      const float germination_respiration = germinated_seed * SIM_BAOBAB_GERMINATION_RESPIRATION_FRACTION;
+      const float seed_establishment = germinated_seed * 0.26f;
+      b_failed_seed = sim_max(0.0f, germinated_seed - seed_establishment - germination_respiration);
       baobab_leaf_next[i] = model_dt_days * seed_establishment * 0.18f;
       baobab_stem_next[i] = model_dt_days * seed_establishment * 0.22f;
       baobab_root_next[i] = model_dt_days * seed_establishment * 0.6f;
@@ -6885,6 +6901,13 @@ static void sim_update_plant_carbon_seeds_impl(
       b_seed_death = (sim_seed_mortality_rate(wetness, temp_c, 0.0022f, 0.014f) +
         0.035f * sim_clamp((wetness - 0.68f) / 0.24f, 0.0f, 1.0f)) * baobab_seed[i];
       seed_b = sim_min(baobab_seed[i] / model_dt_days + baobab_seed_input, b_germ_flux);
+      const float b_available_seed_removal = sim_max(0.0f, baobab_seed[i] / model_dt_days + baobab_seed_input);
+      const float b_seed_removal = seed_b + b_seed_death;
+      if (b_seed_removal > b_available_seed_removal && b_seed_removal > 0.0f) {
+        const float scale = b_available_seed_removal / b_seed_removal;
+        seed_b *= scale;
+        b_seed_death *= scale;
+      }
       baobab_seed_next[i] = sim_clamp(
         baobab_seed[i] + model_dt_days * (baobab_seed_input - seed_b - b_seed_death),
         0.0f,
@@ -6911,7 +6934,10 @@ static void sim_update_plant_carbon_seeds_impl(
       float alloc_stem = 0.0f;
       float alloc_root = 0.0f;
       sim_baobab_allocation(stress_b, light_baobab_stress, b_leaf, b_stem, b_root, &alloc_leaf, &alloc_stem, &alloc_root);
-      const float seed_establishment = sim_max(0.0f, seed_b) * 0.26f;
+      const float germinated_seed = sim_max(0.0f, seed_b);
+      const float germination_respiration = germinated_seed * SIM_BAOBAB_GERMINATION_RESPIRATION_FRACTION;
+      const float seed_establishment = germinated_seed * 0.26f;
+      b_failed_seed = sim_max(0.0f, germinated_seed - seed_establishment - germination_respiration);
       const float drought = 1.0f - sim_clamp(stress_b, 0.0f, 1.0f);
       const float shade = 1.0f - sim_clamp(light_baobab_stress, 0.0f, 1.0f);
       const float starvation = residual_deficit / b_mass;
@@ -6930,15 +6956,13 @@ static void sim_update_plant_carbon_seeds_impl(
       b_litter_total = leaf_loss + stem_loss + root_loss;
     }
 
-    const float failed_b_establishment = seed_b * (1.0f - 0.26f);
+    const float failed_b_establishment = b_failed_seed;
     litter_fast_input += b_litter_fast + b_seed_death + failed_b_establishment;
     litter_slow_input += b_litter_slow;
     plant_nutrient_uptake += 0.052f * gpp_b;
     hydrology_sink0[i] -= 0.00018f * (b_litter_total + b_seed_death);
-    if (write_diagnostics) {
-      mb_next[i] = baobab_leaf_next[i] + baobab_stem_next[i] + baobab_root_next[i];
-      sb_next[i] = baobab_store_next[i];
-    }
+    mb_next[i] = baobab_leaf_next[i] + baobab_stem_next[i] + baobab_root_next[i];
+    sb_next[i] = baobab_store_next[i];
 
     const float rose_soil = rose_fertility[i];
     const float stress_r = sim_clamp(
@@ -6977,6 +7001,7 @@ static void sim_update_plant_carbon_seeds_impl(
     float gpp_r = 0.0f;
     float r_seed_death = 0.0f;
     float seed_r = 0.0f;
+    float r_failed_seed = 0.0f;
     float r_litter_fast = 0.0f;
     float r_litter_slow = 0.0f;
     float r_litter_total = 0.0f;
@@ -6993,15 +7018,24 @@ static void sim_update_plant_carbon_seeds_impl(
         sim_rose_germination_rate(wetness, temp_stress_r, light_rose_stress, ash_load, next_r_readiness, open_fraction, rose_soil);
       r_seed_death = sim_seed_mortality_rate(wetness, temp_c, SIM_ROSE_SEED_BASE_MORTALITY, SIM_ROSE_SEED_STRESS_MORTALITY) * rose_seed[i];
       seed_r = sim_min(rose_seed[i] / model_dt_days + rose_seed_input, r_germ_flux);
+      const float r_available_seed_removal = sim_max(0.0f, rose_seed[i] / model_dt_days + rose_seed_input);
+      const float r_seed_removal = seed_r + r_seed_death;
+      if (r_seed_removal > r_available_seed_removal && r_seed_removal > 0.0f) {
+        const float scale = r_available_seed_removal / r_seed_removal;
+        seed_r *= scale;
+        r_seed_death *= scale;
+      }
       rose_seed_next[i] = sim_clamp(
         rose_seed[i] + model_dt_days * (rose_seed_transport[i] + rose_seed_input - seed_r - r_seed_death),
         0.0f,
         0.35f
       );
-      const float site_suitability = sim_smoothstep(sim_clamp(rose_soil / 1.6f, 0.0f, 1.0f), 0.18f, 0.68f);
       const float seedling_climate = sim_rose_seedling_establishment_factor(wetness, temp_stress_r, light_rose_stress, rose_soil);
-      const float site_establishment = sim_clamp(0.08f + 160.0f * site_suitability * seedling_climate, 0.08f, 160.0f);
-      const float r_seed_establishment = sim_max(0.0f, seed_r) * 0.9f * site_establishment;
+      const float germinated_seed = sim_max(0.0f, seed_r);
+      const float germination_respiration = germinated_seed * SIM_ROSE_GERMINATION_RESPIRATION_FRACTION;
+      const float r_seed_establishment =
+        germinated_seed * sim_min(1.0f - SIM_ROSE_GERMINATION_RESPIRATION_FRACTION, sim_max(0.0f, 0.9f * seedling_climate));
+      r_failed_seed = sim_max(0.0f, germinated_seed - r_seed_establishment - germination_respiration);
       const float establishment_flower_share = sim_clamp((rose_soil - 0.72f) / 0.74f, 0.0f, 1.0f) * 0.18f * sim_clamp(stress_r, 0.0f, 1.0f);
       rose_leaf_next[i] = model_dt_days * r_seed_establishment * (0.4f - establishment_flower_share * 0.45f);
       rose_flower_next[i] = model_dt_days * r_seed_establishment * establishment_flower_share;
@@ -7031,6 +7065,13 @@ static void sim_update_plant_carbon_seeds_impl(
         sim_rose_germination_rate(wetness, temp_stress_r, light_rose_stress, ash_load, next_r_readiness, open_fraction, rose_soil);
       r_seed_death = sim_seed_mortality_rate(wetness, temp_c, SIM_ROSE_SEED_BASE_MORTALITY, SIM_ROSE_SEED_STRESS_MORTALITY) * rose_seed[i];
       seed_r = sim_min(rose_seed[i] / model_dt_days + rose_seed_input, r_germ_flux);
+      const float r_available_seed_removal = sim_max(0.0f, rose_seed[i] / model_dt_days + rose_seed_input);
+      const float r_seed_removal = seed_r + r_seed_death;
+      if (r_seed_removal > r_available_seed_removal && r_seed_removal > 0.0f) {
+        const float scale = r_available_seed_removal / r_seed_removal;
+        seed_r *= scale;
+        r_seed_death *= scale;
+      }
       rose_seed_next[i] = sim_clamp(
         rose_seed[i] + model_dt_days * (rose_seed_transport[i] + rose_seed_input - seed_r - r_seed_death),
         0.0f,
@@ -7058,10 +7099,12 @@ static void sim_update_plant_carbon_seeds_impl(
       float r_alloc_flower = 0.0f;
       float r_alloc_root = 0.0f;
       sim_rose_allocation(stress_r, canopy_light_rose_stress, rose_soil, ash_load, r_leaf, r_flower, r_root, &r_alloc_leaf, &r_alloc_flower, &r_alloc_root);
-      const float site_suitability = sim_smoothstep(sim_clamp(rose_soil / 1.6f, 0.0f, 1.0f), 0.18f, 0.68f);
       const float seedling_climate = sim_rose_seedling_establishment_factor(wetness, temp_stress_r, light_rose_stress, rose_soil);
-      const float site_establishment = sim_clamp(0.08f + 160.0f * site_suitability * seedling_climate, 0.08f, 160.0f);
-      const float r_seed_establishment = sim_max(0.0f, seed_r) * 0.9f * site_establishment;
+      const float germinated_seed = sim_max(0.0f, seed_r);
+      const float germination_respiration = germinated_seed * SIM_ROSE_GERMINATION_RESPIRATION_FRACTION;
+      const float r_seed_establishment =
+        germinated_seed * sim_min(1.0f - SIM_ROSE_GERMINATION_RESPIRATION_FRACTION, sim_max(0.0f, 0.9f * seedling_climate));
+      r_failed_seed = sim_max(0.0f, germinated_seed - r_seed_establishment - germination_respiration);
       const float establishment_flower_share = sim_clamp((rose_soil - 0.72f) / 0.74f, 0.0f, 1.0f) * 0.18f * sim_clamp(stress_r, 0.0f, 1.0f);
       const float r_drought = 1.0f - sim_clamp(stress_r, 0.0f, 1.0f);
       const float r_shade = 1.0f - sim_clamp(canopy_light_rose_stress, 0.0f, 1.0f);
@@ -7080,14 +7123,12 @@ static void sim_update_plant_carbon_seeds_impl(
       r_litter_slow = r_leaf_loss * 0.16f + r_root_loss * 0.62f;
       r_litter_total = r_leaf_loss + r_flower_loss + r_root_loss;
     }
-    const float failed_r_establishment = seed_r * (1.0f - 0.9f);
+    const float failed_r_establishment = r_failed_seed;
     litter_fast_input += r_litter_fast + r_seed_death + failed_r_establishment;
     litter_slow_input += r_litter_slow;
     plant_nutrient_uptake += 0.068f * gpp_r;
     hydrology_sink0[i] -= 0.00018f * (r_litter_total + r_seed_death);
-    if (write_diagnostics) {
-      mr_next[i] = rose_leaf_next[i] + rose_flower_next[i] + rose_root_next[i];
-    }
+    mr_next[i] = rose_leaf_next[i] + rose_flower_next[i] + rose_root_next[i];
     if (!fuse_soil_bio) {
       soil_bio_litter_fast_input[i] = litter_fast_input;
       soil_bio_litter_slow_input[i] = litter_slow_input;
@@ -9206,6 +9247,12 @@ SIM_EXPORT void sim_step_ecosystem(uintptr_t params_offset) {
     rng_state,
     SPU(RNG_STATE_OUT_OFFSET)
   );
+  {
+    const uint32_t *rng_state_out = (const uint32_t *)(uintptr_t)SPU(RNG_STATE_OUT_OFFSET);
+    if (rng_state_out) {
+      ((uint32_t *)(uintptr_t)params)[STEP_RNG_STATE] = *rng_state_out;
+    }
+  }
 
   sim_update_plant_carbon_seeds_impl(
     size,
@@ -9598,6 +9645,12 @@ static void sim_step_ecosystem_setup_to_seed(const uint32_t *params, int32_t inc
     rng_state,
     SPU(RNG_STATE_OUT_OFFSET)
   );
+  {
+    const uint32_t *rng_state_out = (const uint32_t *)(uintptr_t)SPU(RNG_STATE_OUT_OFFSET);
+    if (rng_state_out) {
+      ((uint32_t *)(uintptr_t)params)[STEP_RNG_STATE] = *rng_state_out;
+    }
+  }
 }
 
 static void sim_zero_rose_seed_arrival_range_from_params(const uint32_t *params, int32_t start, int32_t end) {
@@ -9745,6 +9798,7 @@ static void sim_produce_and_distribute_baobab_seeds_from_params(
   if (rng_state_out) {
     *rng_state_out = rng_state;
   }
+  ((uint32_t *)(uintptr_t)params)[STEP_RNG_STATE] = rng_state;
 }
 
 static void sim_produce_rose_seeds_range_from_params(

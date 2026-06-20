@@ -451,7 +451,7 @@ $$
 $$
 H_i^{n+1}
 = H_i^n
-+ \Delta t\left(T^H_i+P_i^{\mathrm{through}}-I_i-E^H_i\right).
++ \Delta t_h\left(T^H_i+P_i^{\mathrm{through}}-I_i-E^H_i\right).
 $$
 
 とする。$T^H_i$ は上の水平輸送項。
@@ -477,8 +477,8 @@ $$
 $$
 I_i
 = \min\left[
-\frac{H_i}{\Delta t}+P_i^{\mathrm{through}},
-\frac{C_{0,i}-W_{0,i}}{\Delta t},
+\frac{H_i}{\Delta t_h}+P_i^{\mathrm{through}},
+\frac{C_{0,i}-W_{0,i}}{\Delta t_h},
 K^I_i
 \max\left(0,\frac{z_i+H_i-h_{0,i}}{d^I_i}\right)
 O_i
@@ -505,13 +505,13 @@ $$
 \begin{aligned}
 W_{0,i}^{n+1}
 &= W_{0,i}^{n}
-+ \Delta t\left(T^W_{0,i}+I_i-q_{01,i}-U_{0,i}-E^S_i\right),\\
++ \Delta t_h\left(T^W_{0,i}+I_i-q_{01,i}-U_{0,i}-E^S_i\right),\\
 W_{1,i}^{n+1}
 &= W_{1,i}^{n}
-+ \Delta t\left(T^W_{1,i}+q_{01,i}-q_{12,i}-U_{1,i}\right),\\
++ \Delta t_h\left(T^W_{1,i}+q_{01,i}-q_{12,i}-U_{1,i}\right),\\
 W_{2,i}^{n+1}
 &= W_{2,i}^{n}
-+ \Delta t\left(T^W_{2,i}+q_{12,i}-q_{2g,i}-U_{2,i}\right).
++ \Delta t_h\left(T^W_{2,i}+q_{12,i}-q_{2g,i}-U_{2,i}\right).
 \end{aligned}
 $$
 
@@ -521,7 +521,7 @@ $$
 
 $$
 G_i^{n+1}
-= G_i^n+\Delta t\left(T^g_i+q_{2g,i}-L_i-U^g_i\right).
+= G_i^n+\Delta t_h\left(T^g_i+q_{2g,i}-L_i-U^g_i\right).
 $$
 
 である。$T^g_i=\nabla\cdot(T^g\nabla h^g)_i$ は地下水水平輸送、$L_i$ は深部漏出、$U^g_i$ は地下水からの根吸水。
@@ -535,12 +535,22 @@ $$
 f_{\mathrm{int}} &= 1-\exp(-0.42\,LAI),\\
 C_{\mathrm{canopy}}^{n+1}
 &= C_{\mathrm{canopy}}^n
-+ \Delta t\left(P f_{\mathrm{int}}-E_{\mathrm{canopy}}\right),\\
-P_{\mathrm{through}} &= P(1-f_{\mathrm{int}}).
++ \Delta t_h\left(I^{can}-E_{\mathrm{canopy}}\right),\\
+P_{\mathrm{through}} &= P-I^{can}.
 \end{aligned}
 $$
 
-実装では canopy storage 容量を超えないように捕捉量を制限する。
+実捕捉量 $I^{can}$ は canopy storage 容量を超えないように制限する。
+
+$$
+I^{can}
+=
+\min\left[
+P f_{\mathrm{int}},
+\frac{C^{max}_{\mathrm{canopy}}-C_{\mathrm{canopy}}}{\Delta t_h}
++E_{\mathrm{canopy}}
+\right].
+$$
 
 蒸発散需要は Penman-Monteith 型の近似で求める。
 
@@ -554,16 +564,16 @@ $$
 
 $$
 U_{p,\ell}
-\propto
-f^{\mathrm{root}}_{p,\ell}
-K_{\ell,i}
-S_{p,\ell}
+=
+G^{root}_{p,\ell}
 \left(\psi_{\ell,i}-\psi^{\mathrm{plant}}_p\right),
+\qquad
+\left[G^{root}_{p,\ell}\right]=\mathrm{day^{-1}},
 \qquad
 \sum_\ell U_{p,\ell}\le Demand_p.
 $$
 
-$p$ はバオバブまたはバラ。
+$G^{root}_{p,\ell}$ は根分布 $f^{root}_{p,\ell}$、層透水性 $K_{\ell,i}$、層ストレス $S_{p,\ell}$、有効経路長をまとめた根水理コンダクタンスである。$p$ はバオバブまたはバラ。
 
 植物体内の水貯留は明示的に持たないので、実蒸散は実際に根・地下水から吸えた量に等しい。
 
@@ -616,7 +626,9 @@ $$
 $$
 \begin{aligned}
 A_n &= \min(W_c,W_j)-R_d,\\
-g_s &= g_0+1.6\left(1+\frac{g_1}{\sqrt{VPD}}\right)\frac{A_n}{C_a},\\
+VPD^* &= \max(VPD,VPD_{\min}),\\
+A_n^+ &= \max(0,A_n),\\
+g_s &= g_0+1.6\left(1+\frac{g_1}{\sqrt{VPD^*}}\right)\frac{A_n^+}{C_a},\\
 GPP_p &= F\left(APAR_p,V_{c\max,p}(T),J_{\max,p}(T),C_i,g_s,water_p,nutrient_p,CO_2\right).
 \end{aligned}
 $$
@@ -667,11 +679,23 @@ $$
 D_p &= \max(0,-Cbal_p),\\
 M_p &= \min\left(\frac{Q_p}{\Delta t_s},D_p m^{store}_p\right),\\
 D^{unmet}_p &= \max(0,D_p-M_p),\\
-C^{cat}_p &= \min\left(D^{unmet}_p,\frac{C^{struct}_p}{\Delta t_s}\right).
+C^{cat}_p &= \min\left(D^{unmet}_p,\frac{C^{struct}_p}{\Delta t_s}\right),\\
+D^{res}_p &= \max(0,D^{unmet}_p-C^{cat}_p),\\
+R^{m,act}_p &= \max(0,R^{m,pot}_p-D^{res}_p).
 \end{aligned}
 $$
 
-$C^{cat}_p$ は葉・花・根・幹などの構造炭素を維持呼吸の基質として直接消費する量であり、リターには入れず大気への自養呼吸として扱う。$D^{unmet}_p-C^{cat}_p$ が残る場合だけ starvation として損失率を増やす。
+$C^{cat}_p$ は葉・花・根・幹などの構造炭素を維持呼吸の基質として直接消費する量であり、リターには入れず大気への自養呼吸として扱う。$D^{res}_p$ が残る場合、支払えなかった維持呼吸として実効維持呼吸 $R^{m,act}_p$ を下げ、同時に starvation として損失率を増やす。
+
+自養呼吸は、
+
+$$
+R^{auto}_p
+=
+R^{m,act}_p+R^g_p+R^{germ}_p.
+$$
+
+$M_p$ と $C^{cat}_p$ は維持呼吸を支払う炭素源であり、$R^{auto}$ へ別項として足さない。
 
 ### 植物炭素プール
 
@@ -687,7 +711,7 @@ P^{seed,desired}_p,
 f^{seed,N}_p C^+_p
 +f^{seed,Q}_p\frac{\max(0,Q_p-Q^{min}_p)}{\Delta t_s}
 \right],\\
-P^{seed,N}_p &= \min(C^+_p,P^{seed,act}_p),\\
+P^{seed,N}_p &= \min(f^{seed,N}_pC^+_p,P^{seed,act}_p),\\
 P^{seed,Q}_p &= \min\left(\max(0,P^{seed,act}_p-P^{seed,N}_p),\frac{\max(0,Q_p-Q^{min}_p)}{\Delta t_s}\right),\\
 C^{veg,+}_p &= C^+_p-P^{seed,N}_p,\\
 A^Q_p &= f^Q_p C^{veg,+}_p,\\
@@ -797,7 +821,7 @@ $$
 \end{aligned}
 $$
 
-現在の公開実装では、両種とも HEALPix セル中心距離に基づく同じ隣接カーネルを使う。種間差は、種子生産率、成熟条件、貯蔵炭素制限、種子死亡率、発芽 readiness、水分・温度・日射・土壌・灰応答、定着後の炭素配分で表す。
+現在の公開実装では、両種とも HEALPix セル中心距離に基づく同じ隣接カーネルを使う。これは未解像の散布過程を、親セルと隣接セルへの確率的なセル間遷移として粗視化したモデルである。種間差は、種子生産率、成熟条件、貯蔵炭素制限、種子死亡率、発芽 readiness、水分・温度・日射・土壌・灰応答、定着後の炭素配分で表す。
 
 発芽・定着は、種子バンク、有効水分、温度、日射、土壌、灰、空き地で決まる。
 
@@ -809,6 +833,22 @@ r^p_g(wetness_i,T_i,light_i,soil_i,ash_i,open_i,readiness_i),\\
 open_i &= \max(0,1-Cover_i).
 \end{aligned}
 $$
+
+発芽した種子炭素は、実生組織、発芽呼吸、失敗定着リターへ分ける。
+
+$$
+\sum_x e^x_p+f^{germ,resp}_p+f^{failed}_p=1.
+$$
+
+$$
+\begin{aligned}
+G^{seed,x}_p &= e^x_pG^p,\\
+R^{germ}_p &= f^{germ,resp}_pG^p,\\
+L^{failed}_p &= f^{failed}_pG^p.
+\end{aligned}
+$$
+
+$G^{seed,x}_p$ は実生の葉・花・幹・根へ入り、$R^{germ}_p$ は自養呼吸、$L^{failed}_p$ は速いリター入力として扱う。
 
 ### リター・土壌炭素
 
@@ -982,6 +1022,16 @@ $$
 C^{resp}_{q,i} &= f^C_{\mathrm{resp}} C^{eat}_{q,i},\\
 C^{body}_{q,i} &= f^C_{\mathrm{body}} C^{eat}_{q,i}.
 \end{aligned}
+$$
+
+炭素分配率は、
+
+$$
+f^C_{\mathrm{dung}}
++f^C_{\mathrm{resp}}
++f^C_{\mathrm{body}}
++f^C_{\mathrm{export}}
+=1.
 $$
 
 羊の体炭素は追跡対象の生態系炭素プールに含めない。したがって、土壌へ戻らない分、すなわち呼吸、体内保持、ゲーム外への輸送は外部項として扱う。
