@@ -12,7 +12,7 @@
 #define SIM_CELL_KERNEL_BLOCK_SIZE 1024
 #define SIM_PHOTOSYNTHESIS_PICARD_ITERATIONS 2
 #define SIM_ROSE_ARRIVAL_BLOCK_SIZE 4096
-#define SIM_ROSE_SEED_PRODUCTION_COEFF 0.015f
+#define SIM_ROSE_SEED_PRODUCTION_COEFF 0.03f
 #define SIM_ROSE_SEED_BASE_MORTALITY 0.0035f
 #define SIM_ROSE_SEED_STRESS_MORTALITY 0.026f
 #define SIM_ROSE_BACKGROUND_MORTALITY 0.00002f
@@ -132,20 +132,31 @@ static inline float sim_clamp(float value, float lower, float upper) {
   return value;
 }
 
-static inline float sim_rose_root_aeration_factor(float surface_water, float top_saturation) {
-  const float air_filled_pore = sim_clamp(1.0f - top_saturation, 0.0f, 1.0f);
-  const float air_factor = sim_clamp((air_filled_pore - 0.04f) / 0.08f, 0.0f, 1.0f);
+static inline float sim_smoothstep01(float value) {
+  const float x = sim_clamp(value, 0.0f, 1.0f);
+  return x * x * (3.0f - 2.0f * x);
+}
+
+static inline float sim_rose_root_aeration_factor(float surface_water, float top_saturation, float rose_soil) {
+  const float drainage = sim_clamp((rose_soil - 0.45f) / 1.15f, 0.0f, 1.0f);
+  const float effective_saturation = sim_clamp(top_saturation - 0.12f * drainage, 0.0f, 1.0f);
+  const float air_filled_pore = sim_clamp(1.0f - effective_saturation, 0.0f, 1.0f);
+  const float min_air_filled_pore = 0.025f + 0.035f * drainage;
+  const float aeration_range = 0.1f + 0.08f * drainage;
+  const float air_factor = sim_clamp((air_filled_pore - min_air_filled_pore) / aeration_range, 0.0f, 1.0f);
   const float gas_diffusion_factor = air_factor * air_factor * (3.0f - 2.0f * air_factor);
   const float ponded_water = surface_water > 0.0f ? surface_water : 0.0f;
-  const float surface_film_factor = 1.0f / (1.0f + ponded_water / 0.0035f);
+  const float surface_film_factor = 1.0f / (1.0f + ponded_water / (0.0035f + 0.0035f * drainage));
   return sim_clamp(gas_diffusion_factor * surface_film_factor, 0.0f, 1.0f);
 }
 
 static inline float sim_rose_water_stress_with_waterlogging(float root_water_r, float rose_soil, float surface_water, float top_saturation) {
   const float pond_support = sim_clamp(surface_water * 10.0f, 0.0f, 1.0f);
   const float base_stress = sim_clamp(root_water_r * (0.84f + rose_soil * 0.1f) + 0.1f * pond_support - 0.015f, 0.0f, 1.0f);
-  const float aeration = sim_rose_root_aeration_factor(surface_water, top_saturation);
-  const float oxygen_factor = 0.18f + 0.82f * aeration;
+  const float drainage = sim_clamp((rose_soil - 0.45f) / 1.15f, 0.0f, 1.0f);
+  const float aeration = sim_rose_root_aeration_factor(surface_water, top_saturation, rose_soil);
+  const float oxygen_floor = 0.18f + 0.22f * drainage;
+  const float oxygen_factor = oxygen_floor + (1.0f - oxygen_floor) * aeration;
   return sim_clamp(base_stress * oxygen_factor, 0.0f, 1.0f);
 }
 
@@ -386,6 +397,64 @@ static inline float sim_surface_water_velocity_scale(
     velocity = surface_slope_max_velocity_m_day;
   }
   return velocity / slope;
+}
+
+static inline float sim_surface_mfd_drop_sum(
+  int32_t source,
+  const int32_t *SIM_RESTRICT stencil,
+  const float *SIM_RESTRICT elevation,
+  const float *SIM_RESTRICT h
+) {
+  const int32_t offset = source * SIM_RBF_STENCIL_SIZE;
+  const float source_head = elevation[source] + h[source];
+  float drop_sum = 0.0f;
+  SIM_UNROLL_LOOP
+  for (int32_t k = 0; k < SIM_RBF_STENCIL_SIZE; k += 1) {
+    const int32_t target = stencil[offset + k];
+    if (target == source) {
+      continue;
+    }
+    const float drop = source_head - (elevation[target] + h[target]);
+    if (drop > 0.0f) {
+      drop_sum += drop;
+    }
+  }
+  return drop_sum;
+}
+
+static inline float sim_surface_mfd_drop_to_target(
+  int32_t source,
+  int32_t target,
+  const int32_t *SIM_RESTRICT stencil,
+  const float *SIM_RESTRICT elevation,
+  const float *SIM_RESTRICT h
+) {
+  const int32_t offset = source * SIM_RBF_STENCIL_SIZE;
+  const float source_head = elevation[source] + h[source];
+  SIM_UNROLL_LOOP
+  for (int32_t k = 0; k < SIM_RBF_STENCIL_SIZE; k += 1) {
+    const int32_t candidate = stencil[offset + k];
+    if (candidate != target) {
+      continue;
+    }
+    return source_head - (elevation[target] + h[target]);
+  }
+  return 0.0f;
+}
+
+static inline float sim_surface_mfd_outflow_rate(
+  float surface_water_m,
+  float surface_ux,
+  float surface_uy,
+  float cell_size_m,
+  float surface_film_threshold_m
+) {
+  const float mobile_surface_water = surface_water_m > surface_film_threshold_m ? surface_water_m - surface_film_threshold_m : 0.0f;
+  if (mobile_surface_water <= 0.0f || cell_size_m <= 0.0f) {
+    return 0.0f;
+  }
+  const float speed = sim_sqrt(surface_ux * surface_ux + surface_uy * surface_uy);
+  return speed * mobile_surface_water / cell_size_m;
 }
 
 static inline float sim_scalbn_positive_normal(float value, int32_t exponent_delta) {
@@ -790,6 +859,32 @@ static inline float sim_nutrient_stress(float mineral_n, float substrate_factor)
   const float available = sim_max(0.0f, mineral_n);
   const float substrate = sim_clamp(substrate_factor, 0.25f, 1.45f);
   return sim_clamp(0.12f + 0.88f * substrate * available / (available + half_saturation), 0.0f, 1.0f);
+}
+
+static inline void sim_partition_apar(
+  float par,
+  float lai_b,
+  float lai_r,
+  float baobab_extinction,
+  float rose_extinction,
+  float cover,
+  float *total_apar,
+  float *baobab_apar,
+  float *rose_apar
+) {
+  const float optical_depth_b = baobab_extinction * sim_max(0.0f, lai_b);
+  const float optical_depth_r = rose_extinction * sim_max(0.0f, lai_r);
+  const float optical_depth_total = optical_depth_b + optical_depth_r;
+  if (par <= 0.0f || optical_depth_total <= 1.0e-9f) {
+    *total_apar = 0.0f;
+    *baobab_apar = 0.0f;
+    *rose_apar = 0.0f;
+    return;
+  }
+  const float total = par * cover;
+  *total_apar = total;
+  *baobab_apar = total * optical_depth_b / optical_depth_total;
+  *rose_apar = total * optical_depth_r / optical_depth_total;
 }
 
 typedef struct {
@@ -1233,6 +1328,7 @@ SIM_EXPORT void sim_prepare_photosynthesis_inputs(
 
   const int32_t size2 = size * 2;
   const float deep_bias = sim_clamp((root_depth - 1.0f) / 7.0f, 0.0f, 1.0f);
+  (void)vegetation_cover;
 
   for (int32_t cell_offset = 0; cell_offset < active_count; cell_offset += 1) {
     const int32_t i = sim_active_cell_id(active_ids_offset, active_ids, cell_offset);
@@ -1274,9 +1370,9 @@ SIM_EXPORT void sim_prepare_photosynthesis_inputs(
     );
     const float rose_deeper = sim_clamp((rose_root_frac - 0.2f) / 0.26f, 0.0f, 1.0f);
     const float root_water_r = sim_weighted_root_stress4(
-      0.7f - 0.18f * rose_deeper,
-      0.22f + 0.08f * rose_deeper,
-      0.08f + 0.1f * rose_deeper,
+      0.82f - 0.1f * rose_deeper,
+      0.16f + 0.08f * rose_deeper,
+      0.02f + 0.02f * rose_deeper,
       0.0f,
       layer_stress_r0,
       layer_stress_r1,
@@ -1298,15 +1394,21 @@ SIM_EXPORT void sim_prepare_photosynthesis_inputs(
 
     const float lai_b = lai_baobab[i];
     const float lai_r = lai_rose[i];
-    const float lai_total = lai_b + lai_r;
+    const float cover = 1.0f - sim_exp(-(0.58f * sim_max(0.0f, lai_b) + 0.68f * sim_max(0.0f, lai_r)));
     float total_apar = 0.0f;
     float baobab_apar = 0.0f;
     float rose_apar = 0.0f;
-    if (par[i] > 0.0f && lai_total > 1.0e-9f) {
-      total_apar = par[i] * vegetation_cover[i];
-      baobab_apar = total_apar * lai_b / lai_total;
-      rose_apar = total_apar * lai_r / lai_total;
-    }
+    sim_partition_apar(
+      par[i],
+      lai_b,
+      lai_r,
+      0.58f,
+      0.68f,
+      cover,
+      &total_apar,
+      &baobab_apar,
+      &rose_apar
+    );
     apar_total[i] = total_apar;
     apar_baobab[i] = baobab_apar;
     apar_rose[i] = rose_apar;
@@ -1637,9 +1739,9 @@ SIM_EXPORT void sim_prepare_and_update_photosynthesis(
     );
     const float rose_deeper = sim_clamp((rose_root_frac - 0.2f) / 0.26f, 0.0f, 1.0f);
     const float root_water_r = sim_weighted_root_stress4(
-      0.7f - 0.18f * rose_deeper,
-      0.22f + 0.08f * rose_deeper,
-      0.08f + 0.1f * rose_deeper,
+      0.82f - 0.1f * rose_deeper,
+      0.16f + 0.08f * rose_deeper,
+      0.02f + 0.02f * rose_deeper,
       0.0f,
       layer_stress_r0,
       layer_stress_r1,
@@ -1663,15 +1765,20 @@ SIM_EXPORT void sim_prepare_and_update_photosynthesis(
 
     const float lai_b = lai_baobab[i];
     const float lai_r = lai_rose[i];
-    const float lai_total = lai_b + lai_r;
     float total_apar = 0.0f;
     float baobab_apar = 0.0f;
     float rose_apar = 0.0f;
-    if (par[i] > 0.0f && lai_total > 1.0e-9f) {
-      total_apar = par[i] * vegetation_cover[i];
-      baobab_apar = total_apar * lai_b / lai_total;
-      rose_apar = total_apar * lai_r / lai_total;
-    }
+    sim_partition_apar(
+      par[i],
+      lai_b,
+      lai_r,
+      baobab_extinction,
+      rose_extinction,
+      vegetation_cover[i],
+      &total_apar,
+      &baobab_apar,
+      &rose_apar
+    );
     apar_total[i] = total_apar;
     apar_baobab[i] = baobab_apar;
     apar_rose[i] = rose_apar;
@@ -1947,9 +2054,9 @@ SIM_EXPORT void sim_update_plant_water_fluxes(
     brf2 = sim_max(0.0f, brf2) / brf_total;
     brf3 = sim_max(0.0f, brf3) / brf_total;
     const float rose_deeper = sim_clamp((rose_root_frac - 0.2f) / 0.26f, 0.0f, 1.0f);
-    const float rrf0 = 0.7f - 0.18f * rose_deeper;
-    const float rrf1 = 0.22f + 0.08f * rose_deeper;
-    const float rrf2 = 0.08f + 0.1f * rose_deeper;
+    const float rrf0 = 0.82f - 0.1f * rose_deeper;
+    const float rrf1 = 0.16f + 0.08f * rose_deeper;
+    const float rrf2 = 0.02f + 0.02f * rose_deeper;
     const float rrf3 = 0.0f;
 
     const float lai_b = lai_baobab[i];
@@ -2957,9 +3064,9 @@ SIM_EXPORT void sim_update_canopy_environment_photosynthesis(
     );
     const float rose_deeper = sim_clamp((rose_root_frac - 0.2f) / 0.26f, 0.0f, 1.0f);
     const float root_water_r = sim_weighted_root_stress4(
-      0.7f - 0.18f * rose_deeper,
-      0.22f + 0.08f * rose_deeper,
-      0.08f + 0.1f * rose_deeper,
+      0.82f - 0.1f * rose_deeper,
+      0.16f + 0.08f * rose_deeper,
+      0.02f + 0.02f * rose_deeper,
       0.0f,
       layer_stress_r0,
       layer_stress_r1,
@@ -2984,11 +3091,17 @@ SIM_EXPORT void sim_update_canopy_environment_photosynthesis(
     float total_apar = 0.0f;
     float baobab_apar = 0.0f;
     float rose_apar = 0.0f;
-    if (local_par > 0.0f && lai_total > 1.0e-9f) {
-      total_apar = local_par * cover;
-      baobab_apar = total_apar * lai_b / lai_total;
-      rose_apar = total_apar * lai_r / lai_total;
-    }
+    sim_partition_apar(
+      local_par,
+      lai_b,
+      lai_r,
+      baobab_extinction,
+      rose_extinction,
+      cover,
+      &total_apar,
+      &baobab_apar,
+      &rose_apar
+    );
     apar_total[i] = total_apar;
     apar_baobab[i] = baobab_apar;
     apar_rose[i] = rose_apar;
@@ -3148,6 +3261,7 @@ SIM_EXPORT void sim_transport_darcy_water_columns(
   (void)size;
   (void)stencil_size;
   (void)surface_slope_velocity_m_day;
+  (void)baobab_seed_diffusion_m2_day;
   const int32_t *SIM_RESTRICT active_ids = (const int32_t *)(uintptr_t)active_ids_offset;
   const int32_t *SIM_RESTRICT stencil = (const int32_t *)(uintptr_t)stencil_offset;
   const float *SIM_RESTRICT lap_w = (const float *)(uintptr_t)lap_w_offset;
@@ -3380,7 +3494,8 @@ SIM_EXPORT void sim_transport_darcy_water_columns(
 
     h_transport[i] = surface_water_diff_m2_day * lap_surface_water;
     soil_mineral_transport[i] = nutrient_diff_m2_day * lap_nutrient;
-    baobab_seed_transport[i] = baobab_seed_diffusion_m2_day * lap_baobab_seed;
+    (void)lap_baobab_seed;
+    baobab_seed_transport[i] = 0.0f;
     rose_seed_transport[i] = transport_rose_seed ? rose_seed_diffusion_m2_day * lap_rose_seed : 0.0f;
   }
 
@@ -3423,6 +3538,10 @@ SIM_EXPORT void sim_transport_darcy_water_columns(
     }
 
     h_transport[i] -= surface_flux_divergence_x + surface_flux_divergence_y;
+    const float max_surface_loss = sim_max(0.0f, h[i] - surface_film_threshold_m) / dt_days;
+    if (h_transport[i] < -max_surface_loss) {
+      h_transport[i] = -max_surface_loss;
+    }
     soil_mineral_transport[i] -= nutrient_flux_divergence_x + nutrient_flux_divergence_y;
     const float max_loss = sim_max(0.0f, soil_mineral_n[i] - 0.002f) * 0.32f / dt_days;
     const float max_gain = sim_max(0.0f, 1.4f - soil_mineral_n[i]) * 0.32f / dt_days;
@@ -3518,6 +3637,10 @@ SIM_EXPORT void sim_transport_surface_nutrient(
     }
 
     h_transport[i] -= surface_flux_divergence_x + surface_flux_divergence_y;
+    const float max_surface_loss = sim_max(0.0f, h[i] - surface_film_threshold_m) / model_dt_days;
+    if (h_transport[i] < -max_surface_loss) {
+      h_transport[i] = -max_surface_loss;
+    }
     soil_mineral_transport[i] -= nutrient_flux_divergence_x + nutrient_flux_divergence_y;
     const float max_loss = sim_max(0.0f, soil_mineral_n[i] - 0.002f) * 0.32f / model_dt_days;
     const float max_gain = sim_max(0.0f, 1.4f - soil_mineral_n[i]) * 0.32f / model_dt_days;
@@ -3639,6 +3762,10 @@ SIM_EXPORT int32_t sim_compute_stable_surface_water_transport(
 
     for (int32_t cell_offset = 0; cell_offset < active_count; cell_offset += 1) {
       const int32_t i = sim_active_cell_id(active_ids_offset, active_ids, cell_offset);
+      const float max_surface_loss = sim_max(0.0f, hn[i] - surface_film_threshold_m) / sub_dt_days;
+      if (h_transport[i] < -max_surface_loss) {
+        h_transport[i] = -max_surface_loss;
+      }
       float next = hn[i] + sub_dt_days * h_transport[i];
       if (!sim_is_finite(next)) {
         return 0;
@@ -4601,6 +4728,18 @@ static inline float sim_earth_rose_suitability(
   const float abs_lat = sim_abs(lat);
   const float temperate = sim_exp(-0.5f * ((abs_lat - 42.0f) / 13.0f) * ((abs_lat - 42.0f) / 13.0f));
   const float mild = sim_exp(-0.5f * ((abs_lat - 30.0f) / 10.0f) * ((abs_lat - 30.0f) / 10.0f));
+  const float northern_temperate_range =
+    sim_smoothstep(lat, 18.0f, 32.0f) * (1.0f - sim_smoothstep(lat, 58.0f, 70.0f));
+  const float southern_temperate_garden_range =
+    sim_smoothstep(-lat, 27.0f, 35.0f) * (1.0f - sim_smoothstep(-lat, 45.0f, 58.0f));
+  const float native_range_anchors =
+    sim_geo_blob(lon, lat, 15.0f, 47.0f, 34.0f, 12.0f, 0.72f) +
+    sim_geo_blob(lon, lat, 48.0f, 38.0f, 20.0f, 9.0f, 0.56f) +
+    sim_geo_blob(lon, lat, 78.0f, 41.0f, 20.0f, 9.0f, 0.48f) +
+    sim_geo_blob(lon, lat, 113.0f, 36.0f, 24.0f, 11.0f, 0.7f) +
+    sim_geo_blob(lon, lat, 138.0f, 37.0f, 12.0f, 7.0f, 0.48f) +
+    sim_geo_blob(lon, lat, -96.0f, 42.0f, 34.0f, 13.0f, 0.68f) +
+    sim_geo_blob(lon, lat, -123.0f, 44.0f, 11.0f, 13.0f, 0.38f);
   const float settled_gardens =
     sim_geo_blob(lon, lat, 8.0f, 48.0f, 18.0f, 8.0f, 0.58f) +
     sim_geo_blob(lon, lat, 118.0f, 34.0f, 18.0f, 9.0f, 0.54f) +
@@ -4608,15 +4747,26 @@ static inline float sim_earth_rose_suitability(
     sim_geo_blob(lon, lat, -82.0f, 38.0f, 18.0f, 9.0f, 0.5f) +
     sim_geo_blob(lon, lat, -63.0f, -35.0f, 16.0f, 8.0f, 0.36f) +
     sim_geo_blob(lon, lat, 145.0f, -37.0f, 12.0f, 6.0f, 0.34f);
-  const float temp_fit = sim_smoothstep(mean_temp_c, -3.0f, 12.0f) * (1.0f - sim_smoothstep(mean_temp_c, 27.0f, 34.0f));
+  const float temp_fit = sim_smoothstep(mean_temp_c, -3.0f, 12.0f) * (1.0f - sim_smoothstep(mean_temp_c, 24.0f, 31.0f));
   const float moisture_fit =
-    sim_smoothstep(rain_mm, 520.0f, 850.0f) *
-    (1.0f - sim_smoothstep(rain_mm, 1660.0f, 2200.0f));
-  const float arid_exclusion = 1.0f - 0.78f * (1.0f - sim_smoothstep(rain_mm, 320.0f, 560.0f));
+    sim_smoothstep(rain_mm, 560.0f, 900.0f) *
+    (1.0f - sim_smoothstep(rain_mm, 1500.0f, 2100.0f));
+  const float arid_exclusion = 0.04f + 0.96f * sim_smoothstep(rain_mm, 450.0f, 720.0f);
   const float hot_lowland_exclusion =
-    1.0f - 0.68f * (1.0f - sim_smoothstep(abs_lat, 12.0f, 24.0f)) * sim_smoothstep(mean_temp_c, 23.0f, 29.0f);
-  const float landscape_fit = sim_clamp(0.54f * temperate + 0.2f * mild + 0.38f * settled_gardens + 0.12f, 0.0f, 1.0f);
-  const float penalty = desert_score * 0.72f + mountain_score * 0.58f + rainforest_score * 0.34f;
+    1.0f -
+    0.88f * (1.0f - sim_smoothstep(abs_lat, 18.0f, 30.0f)) *
+      sim_smoothstep(mean_temp_c, 22.0f, 28.0f) *
+      (1.0f - 0.55f * sim_smoothstep(mountain_score, 0.34f, 0.72f));
+  const float range_fit = sim_clamp(
+    0.52f * northern_temperate_range +
+      0.22f * southern_temperate_garden_range +
+      0.34f * native_range_anchors +
+      0.24f * settled_gardens,
+    0.0f,
+    1.0f
+  );
+  const float landscape_fit = sim_clamp(0.62f * temperate + 0.12f * mild + 0.46f * range_fit, 0.0f, 1.0f);
+  const float penalty = desert_score * 1.06f + mountain_score * 0.42f + rainforest_score * 0.34f;
   return sim_clamp(
     land * landscape_fit * temp_fit * (0.14f + 0.86f * moisture_fit) * arid_exclusion * hot_lowland_exclusion * (1.0f - sim_clamp(penalty, 0.0f, 1.0f)),
     0.0f,
@@ -5247,13 +5397,14 @@ static inline float sim_initial_rose_fertility(
 ) {
   if (is_earth) {
     const int32_t unsuitable = terrain == SIM_TERRAIN_WATER || terrain == SIM_TERRAIN_ROCK || terrain == SIM_TERRAIN_VOLCANO;
+    const float rose_suitability = sim_clamp(flower / 0.55f, 0.0f, 1.0f);
     const float raw = unsuitable
       ? 0.08f
       : sim_clamp(
-          0.34f +
+          0.14f +
             flower * 2.16f +
-            (terrain == SIM_TERRAIN_MOSS || terrain == SIM_TERRAIN_MEADOW ? 0.34f : 0.0f) +
-            sim_max(0.0f, moisture - 0.34f) * 0.48f -
+            (terrain == SIM_TERRAIN_MOSS || terrain == SIM_TERRAIN_MEADOW ? 0.26f * rose_suitability : 0.0f) +
+            sim_max(0.0f, moisture - 0.34f) * 0.32f * rose_suitability -
             (terrain == SIM_TERRAIN_SAND ? 0.2f : 0.0f) +
             (is_rose_garden ? 0.5f : 0.0f),
           0.1f,
@@ -6144,8 +6295,13 @@ static inline float sim_update_seed_readiness(float previous, float wetness, flo
 }
 
 static inline float sim_baobab_seed_production(float stem_c, float leaf_c, float stress, float temp_stress) {
-  const float maturity = sim_clamp((stem_c - 0.08f) / 0.55f, 0.0f, 1.0f);
-  return 0.0048f * maturity * (0.35f + 0.65f * stress) * (0.25f + 0.75f * temp_stress) * (0.45f + leaf_c);
+  const float maturity = sim_smoothstep01((stem_c - 0.045f) / 0.28f);
+  return 0.0085f * maturity * (0.35f + 0.65f * stress) * (0.25f + 0.75f * temp_stress) * (0.45f + leaf_c);
+}
+
+static inline float sim_baobab_seed_production_carbon_limit(float positive_npp, float store_c, float dt_days) {
+  const float safe_dt_days = sim_max(1.0e-6f, dt_days);
+  return sim_max(0.0f, positive_npp) * 0.45f + sim_max(0.0f, store_c) * 0.32f / safe_dt_days;
 }
 
 static inline float sim_baobab_germination_rate(
@@ -6164,11 +6320,26 @@ static inline float sim_baobab_germination_rate(
   static const float substrate_factor[5] = {1.0f, 0.45f, 1.12f, 1.0f, 0.82f};
   const float wet_penalty = 1.0f - 0.92f * sim_clamp((wetness - 0.64f) / 0.28f, 0.0f, 1.0f);
   const float dry_pulse = sim_clamp((wetness - 0.18f) / 0.34f, 0.0f, 1.0f) * sim_max(0.04f, wet_penalty);
-  const float risk = sim_clamp(0.25f + baobab_risk * 0.95f, 0.0f, 1.0f);
+  const float habitat_recruitment = sim_smoothstep01((baobab_risk - 0.18f) / 0.56f);
   const float ash_penalty = 1.0f - sim_clamp(ash_stress * 1.4f, 0.0f, 1.0f) * 0.86f;
   const float readiness_factor = sim_clamp((readiness - 0.08f) / 0.58f, 0.0f, 1.0f);
   return 0.11f * readiness_factor * dry_pulse * temp_stress * sim_clamp(0.25f + 0.75f * light, 0.0f, 1.0f) *
-    risk * sim_max(0.08f, ash_penalty) * substrate_factor[sim_substrate_index(substrate_index)];
+    habitat_recruitment * sim_max(0.08f, ash_penalty) * substrate_factor[sim_substrate_index(substrate_index)];
+}
+
+static inline float sim_rose_recruitment_climate_factor(float wetness, float temp_stress, float light) {
+  const float moisture_lower = sim_clamp((wetness - 0.26f) / 0.34f, 0.0f, 1.0f);
+  const float waterlogging_penalty = 1.0f - 0.78f * sim_clamp((wetness - 0.82f) / 0.16f, 0.0f, 1.0f);
+  const float moisture_window = sim_max(0.0f, moisture_lower * waterlogging_penalty);
+  const float temperature_window = sim_smoothstep01((temp_stress - 0.28f) / 0.48f);
+  const float light_window = sim_smoothstep01((light - 0.14f) / 0.42f);
+  return sim_clamp(moisture_window * temperature_window * light_window, 0.0f, 1.0f);
+}
+
+static inline float sim_rose_seedling_establishment_factor(float wetness, float temp_stress, float light, float rose_soil) {
+  const float climate = sim_rose_recruitment_climate_factor(wetness, temp_stress, light);
+  const float soil = sim_smoothstep01((sim_clamp(rose_soil / 1.6f, 0.0f, 1.0f) - 0.18f) / 0.5f);
+  return sim_clamp(climate * soil, 0.0f, 1.0f);
 }
 
 static inline float sim_rose_germination_rate(
@@ -6180,12 +6351,13 @@ static inline float sim_rose_germination_rate(
   float open_fraction,
   float rose_fertility
 ) {
-  const float moisture = sim_clamp((wetness - 0.28f) / 0.42f, 0.0f, 1.0f);
+  const float climate = sim_rose_recruitment_climate_factor(wetness, temp_stress, light);
   const float fertility = sim_clamp(rose_fertility / 1.6f, 0.0f, 1.0f);
+  const float fertility_barrier = sim_smoothstep(fertility, 0.18f, 0.68f);
   const float ash_penalty = 1.0f - sim_clamp(ash_load * 0.8f, 0.0f, 1.0f);
-  const float readiness_factor = sim_clamp((readiness - 0.12f) / 0.58f, 0.0f, 1.0f);
-  return 0.24f * readiness_factor * moisture * temp_stress * sim_clamp(0.35f + 0.65f * light, 0.0f, 1.0f) *
-    fertility * ash_penalty * sim_clamp(open_fraction, 0.0f, 1.0f);
+  const float readiness_factor = sim_clamp((readiness - 0.08f) / 0.52f, 0.0f, 1.0f);
+  return 3.0f * readiness_factor * climate *
+    fertility * fertility_barrier * ash_penalty * sim_clamp(open_fraction, 0.0f, 1.0f);
 }
 
 static inline void sim_baobab_allocation(
@@ -6686,16 +6858,21 @@ static void sim_update_plant_carbon_seeds_impl(
         0.00008f + 0.0011f * (1.0f - stress_b) * (1.0f - stress_b) +
         0.00028f * (1.0f - canopy_light_baobab_stress) + 0.00016f * (1.0f - substrate_root_b(sub)) + 0.0065f * ash_load +
         0.014f * sim_clamp((wetness - 0.68f) / 0.22f, 0.0f, 1.0f) * sim_clamp((wetness - 0.68f) / 0.22f, 0.0f, 1.0f);
+      const float positive_npp = sim_max(0.0f, carbon_balance_b);
       const float baobab_seed_prod_potential = sim_baobab_seed_production(b_stem, b_leaf, stress_b, temp_stress_b);
-      const float baobab_seed_prod = sim_min(baobab_seed_prod_potential, sim_max(0.0f, b_store) * 0.32f / model_dt_days);
-      const float effective_b_seed_pool = baobab_seed[i] + baobab_seed_prod * model_dt_days * 0.18f;
+      const float baobab_seed_prod = sim_min(
+        baobab_seed_prod_potential,
+        sim_baobab_seed_production_carbon_limit(positive_npp, b_store, model_dt_days)
+      );
+      const float baobab_seed_input = baobab_seed_transport[i];
+      const float effective_b_seed_pool = baobab_seed[i] + baobab_seed_input * model_dt_days;
       const float b_germ_flux = effective_b_seed_pool *
         sim_baobab_germination_rate(wetness, temp_stress_b, light_baobab_stress, sub, next_b_readiness, baobab_risk[i], ash_stress_value, blocked);
       b_seed_death = (sim_seed_mortality_rate(wetness, temp_c, 0.0022f, 0.014f) +
         0.035f * sim_clamp((wetness - 0.68f) / 0.24f, 0.0f, 1.0f)) * baobab_seed[i];
-      seed_b = sim_min(baobab_seed[i] / model_dt_days + baobab_seed_prod, b_germ_flux);
+      seed_b = sim_min(baobab_seed[i] / model_dt_days + baobab_seed_input, b_germ_flux);
       baobab_seed_next[i] = sim_clamp(
-        baobab_seed[i] + model_dt_days * (baobab_seed_transport[i] + baobab_seed_prod - seed_b - b_seed_death),
+        baobab_seed[i] + model_dt_days * (baobab_seed_input - seed_b - b_seed_death),
         0.0f,
         0.7f
       );
@@ -6704,7 +6881,6 @@ static void sim_update_plant_carbon_seeds_impl(
       const float deficit = sim_max(0.0f, -carbon_balance_b);
       const float mobilized = sim_min(b_store / model_dt_days, deficit * 0.9f);
       const float unmet_deficit = sim_max(0.0f, deficit - mobilized);
-      const float positive_npp = sim_max(0.0f, carbon_balance_b);
       const float seed_output_b = sim_max(0.0f, baobab_seed_prod);
       const float seed_from_npp_b = sim_min(positive_npp, seed_output_b);
       const float seed_from_store_b = sim_max(0.0f, seed_output_b - seed_from_npp_b);
@@ -6803,8 +6979,10 @@ static void sim_update_plant_carbon_seeds_impl(
         0.0f,
         0.35f
       );
-      const float site_establishment = sim_clamp(0.72f + 2.65f * sim_clamp((rose_soil - 0.42f) / 1.12f, 0.0f, 1.0f), 0.72f, 3.15f);
-      const float r_seed_establishment = sim_max(0.0f, seed_r) * 0.45f * site_establishment;
+      const float site_suitability = sim_smoothstep(sim_clamp(rose_soil / 1.6f, 0.0f, 1.0f), 0.18f, 0.68f);
+      const float seedling_climate = sim_rose_seedling_establishment_factor(wetness, temp_stress_r, light_rose_stress, rose_soil);
+      const float site_establishment = sim_clamp(0.08f + 160.0f * site_suitability * seedling_climate, 0.08f, 160.0f);
+      const float r_seed_establishment = sim_max(0.0f, seed_r) * 0.9f * site_establishment;
       const float establishment_flower_share = sim_clamp((rose_soil - 0.72f) / 0.74f, 0.0f, 1.0f) * 0.18f * sim_clamp(stress_r, 0.0f, 1.0f);
       rose_leaf_next[i] = model_dt_days * r_seed_establishment * (0.4f - establishment_flower_share * 0.45f);
       rose_flower_next[i] = model_dt_days * r_seed_establishment * establishment_flower_share;
@@ -6856,8 +7034,10 @@ static void sim_update_plant_carbon_seeds_impl(
       float r_alloc_flower = 0.0f;
       float r_alloc_root = 0.0f;
       sim_rose_allocation(stress_r, canopy_light_rose_stress, rose_soil, ash_load, r_leaf, r_flower, r_root, &r_alloc_leaf, &r_alloc_flower, &r_alloc_root);
-      const float site_establishment = sim_clamp(0.72f + 2.65f * sim_clamp((rose_soil - 0.42f) / 1.12f, 0.0f, 1.0f), 0.72f, 3.15f);
-      const float r_seed_establishment = sim_max(0.0f, seed_r) * 0.45f * site_establishment;
+      const float site_suitability = sim_smoothstep(sim_clamp(rose_soil / 1.6f, 0.0f, 1.0f), 0.18f, 0.68f);
+      const float seedling_climate = sim_rose_seedling_establishment_factor(wetness, temp_stress_r, light_rose_stress, rose_soil);
+      const float site_establishment = sim_clamp(0.08f + 160.0f * site_suitability * seedling_climate, 0.08f, 160.0f);
+      const float r_seed_establishment = sim_max(0.0f, seed_r) * 0.9f * site_establishment;
       const float establishment_flower_share = sim_clamp((rose_soil - 0.72f) / 0.74f, 0.0f, 1.0f) * 0.18f * sim_clamp(stress_r, 0.0f, 1.0f);
       const float r_drought = 1.0f - sim_clamp(stress_r, 0.0f, 1.0f);
       const float r_shade = 1.0f - sim_clamp(canopy_light_rose_stress, 0.0f, 1.0f);
@@ -6876,7 +7056,7 @@ static void sim_update_plant_carbon_seeds_impl(
       r_litter_slow = r_leaf_loss * 0.16f + r_root_loss * 0.62f;
       r_litter_total = r_leaf_loss + r_flower_loss + r_root_loss;
     }
-    const float failed_r_establishment = seed_r * (1.0f - 0.45f);
+    const float failed_r_establishment = seed_r * (1.0f - 0.9f);
     litter_fast_input += r_litter_fast + r_seed_death + failed_r_establishment;
     litter_slow_input += r_litter_slow;
     plant_nutrient_uptake += 0.068f * gpp_r;
@@ -8039,6 +8219,7 @@ typedef enum SimStepParam {
   STEP_DISPERSAL_WEIGHTS_OFFSET,
   STEP_DISPERSAL_WEIGHT_SUMS_OFFSET,
   STEP_SUBSTRATE_OFFSET,
+  STEP_LAND_ACTIVE_OFFSET,
   STEP_BAOBAB_BLOCKED_OFFSET,
   STEP_CELL_HEIGHT_OFFSET,
   STEP_CLIMATE_MEAN_TEMP_C_OFFSET,
@@ -8576,6 +8757,13 @@ static void sim_richards_columns_update_hydraulic_from_params(
   uintptr_t active_ids_offset
 );
 
+static void sim_produce_and_distribute_baobab_seeds_from_params(
+  uint32_t *params,
+  int32_t active_count,
+  uintptr_t active_ids_offset,
+  float slow_env_inv_count
+);
+
 SIM_EXPORT void sim_step_ecosystem(uintptr_t params_offset) {
   const uint32_t *params = (const uint32_t *)(uintptr_t)params_offset;
   const int32_t size = SPI(SIZE);
@@ -8951,6 +9139,9 @@ SIM_EXPORT void sim_step_ecosystem(uintptr_t params_offset) {
     SPU(HYDROLOGY_SURFACE_EVAP_DEMAND_M)
   );
 
+  sim_fill_float(SPU(BAOBAB_SEED_TRANSPORT), size, 0.0f);
+  sim_produce_and_distribute_baobab_seeds_from_params((uint32_t *)(uintptr_t)params, active_count, active_offset, 0.0f);
+  rng_state = (uint32_t)SPI(RNG_STATE);
   sim_fill_float(SPU(ROSE_SEED_PRODUCTION), size, 0.0f);
   sim_fill_float(SPU(ROSE_SEED_ARRIVAL), size, 0.0f);
   sim_produce_and_distribute_rose_seeds(
@@ -9340,6 +9531,9 @@ static void sim_step_ecosystem_setup_to_seed(const uint32_t *params, int32_t inc
     SPU(FLUX_Y)
   );
 
+  sim_fill_float(SPU(BAOBAB_SEED_TRANSPORT), size, 0.0f);
+  sim_produce_and_distribute_baobab_seeds_from_params((uint32_t *)(uintptr_t)params, active_count, active_offset, 0.0f);
+  rng_state = (uint32_t)SPI(RNG_STATE);
   sim_fill_float(SPU(ROSE_SEED_PRODUCTION), size, 0.0f);
   sim_fill_float(SPU(ROSE_SEED_ARRIVAL), size, 0.0f);
   sim_produce_and_distribute_rose_seeds(
@@ -9394,6 +9588,138 @@ static void sim_zero_rose_seed_arrival_range_from_params(const uint32_t *params,
   SIM_VECTORIZE_LOOP
   for (int32_t i = start; i < end; i += 1) {
     rose_seed_arrival[i] = 0.0f;
+  }
+}
+
+static void sim_zero_baobab_seed_arrival_range_from_params(const uint32_t *params, int32_t start, int32_t end) {
+  const int32_t size = SPI(SIZE);
+  float *SIM_RESTRICT baobab_seed_arrival = (float *)(uintptr_t)SPU(BAOBAB_SEED_TRANSPORT);
+  if (start < 0) {
+    start = 0;
+  }
+  if (end > size) {
+    end = size;
+  }
+  SIM_VECTORIZE_LOOP
+  for (int32_t i = start; i < end; i += 1) {
+    baobab_seed_arrival[i] = 0.0f;
+  }
+}
+
+static void sim_produce_and_distribute_baobab_seeds_from_params(
+  uint32_t *params,
+  int32_t active_count,
+  uintptr_t active_ids_offset,
+  float slow_env_inv_count
+) {
+  const int32_t size = SPI(SIZE);
+  const int32_t *SIM_RESTRICT active_ids = (const int32_t *)(uintptr_t)active_ids_offset;
+  const uint8_t *SIM_RESTRICT baobab_blocked = (const uint8_t *)(uintptr_t)SPU(BAOBAB_BLOCKED);
+  const float *SIM_RESTRICT baobab_leaf = (const float *)(uintptr_t)SPU(BAOBAB_LEAF);
+  const float *SIM_RESTRICT baobab_stem = (const float *)(uintptr_t)SPU(BAOBAB_STEM);
+  const float *SIM_RESTRICT baobab_root = (const float *)(uintptr_t)SPU(BAOBAB_ROOT);
+  const float *SIM_RESTRICT baobab_store = (const float *)(uintptr_t)SPU(BAOBAB_STORE);
+  const float *SIM_RESTRICT gpp_baobab = (const float *)(uintptr_t)SPU(GPP_BAOBAB);
+  const float *SIM_RESTRICT ash_stress = (const float *)(uintptr_t)SPU(ASH_STRESS);
+  const float *SIM_RESTRICT baobab_respiration_q10 = (const float *)(uintptr_t)SPU(BAOBAB_RESPIRATION_Q10);
+  const float *SIM_RESTRICT root_stress_baobab = (const float *)(uintptr_t)SPU(ROOT_STRESS_BAOBAB);
+  const float *SIM_RESTRICT surface_temp_c = (const float *)(uintptr_t)SPU(SURFACE_TEMP_C);
+  const float *SIM_RESTRICT slow_env_gpp_baobab = (const float *)(uintptr_t)SPU(SLOW_ENV_GPP_BAOBAB);
+  const float *SIM_RESTRICT slow_env_root_stress_baobab = (const float *)(uintptr_t)SPU(SLOW_ENV_ROOT_STRESS_BAOBAB);
+  const float *SIM_RESTRICT slow_env_surface_temp_c = (const float *)(uintptr_t)SPU(SLOW_ENV_SURFACE_TEMP_C);
+  const float *SIM_RESTRICT slow_env_ash_stress = (const float *)(uintptr_t)SPU(SLOW_ENV_ASH_STRESS);
+  const int32_t *SIM_RESTRICT dispersal_offsets = (const int32_t *)(uintptr_t)SPU(DISPERSAL_OFFSETS);
+  const int32_t *SIM_RESTRICT dispersal_targets = (const int32_t *)(uintptr_t)SPU(DISPERSAL_TARGETS);
+  const float *SIM_RESTRICT dispersal_weights = (const float *)(uintptr_t)SPU(DISPERSAL_WEIGHTS);
+  const float *SIM_RESTRICT dispersal_weight_sums = (const float *)(uintptr_t)SPU(DISPERSAL_WEIGHT_SUMS);
+  float *SIM_RESTRICT baobab_seed_arrival = (float *)(uintptr_t)SPU(BAOBAB_SEED_TRANSPORT);
+  uint32_t *rng_state_out = (uint32_t *)(uintptr_t)SPU(RNG_STATE_OUT_OFFSET);
+  const int32_t active_range = (active_ids_offset & SIM_ACTIVE_RANGE_FLAG) ? 1 : 0;
+  const int32_t active_start = active_range ? (int32_t)(active_ids_offset >> 1u) : 0;
+  const int32_t use_slow_env = slow_env_inv_count > 0.0f && slow_env_root_stress_baobab && slow_env_surface_temp_c;
+  const float model_dt_days = SPF(MODEL_DT_DAYS);
+  int32_t cohorts = SPI(ROSE_COHORTS);
+  uint32_t rng_state = (uint32_t)SPI(RNG_STATE);
+  if (cohorts < 1) {
+    cohorts = 1;
+  }
+
+  for (int32_t cell_offset = 0; cell_offset < active_count; cell_offset += 1) {
+    const int32_t i = active_range ? active_start + cell_offset : sim_active_cell_id(active_ids_offset, active_ids, cell_offset);
+    if (i < 0 || i >= size || baobab_blocked[i] != 0u) {
+      continue;
+    }
+    const float adult_carbon = baobab_leaf[i] + baobab_stem[i] + baobab_root[i];
+    if (adult_carbon <= 1.0e-8f) {
+      continue;
+    }
+
+    const float stress_b = sim_clamp(
+      use_slow_env ? slow_env_root_stress_baobab[i] * slow_env_inv_count : root_stress_baobab[i],
+      0.0f,
+      1.0f
+    );
+    const float temp_c = use_slow_env ? slow_env_surface_temp_c[i] * slow_env_inv_count : surface_temp_c[i];
+    const float temp_stress = sim_fast_temperature_response(SIM_TEMP_RESPONSE_BAOBAB_CARBON, temp_c);
+    const float production_potential = sim_baobab_seed_production(baobab_stem[i], baobab_leaf[i], stress_b, temp_stress);
+    const float ash_load = sim_clamp(
+      (use_slow_env ? slow_env_ash_stress[i] * slow_env_inv_count : ash_stress[i]) * 1.8f,
+      0.0f,
+      1.0f
+    );
+    const float gpp_b = sim_max(
+      0.0f,
+      use_slow_env ? slow_env_gpp_baobab[i] * slow_env_inv_count : gpp_baobab[i]
+    ) * sim_max(0.0f, 1.0f - 0.82f * ash_load);
+    const float q10_b = sim_lookup_photosynthesis_temperature(
+      baobab_respiration_q10,
+      SPI(PHOTO_LOOKUP_STEPS),
+      SPF(PHOTO_TEMP_MIN_C),
+      SPF(PHOTO_TEMP_LOOKUP_SCALE),
+      temp_c
+    );
+    const float maintenance_b = q10_b * (
+      0.00082f * baobab_leaf[i] +
+      0.00017f * baobab_stem[i] +
+      0.00034f * baobab_root[i] +
+      0.00008f * baobab_store[i]
+    );
+    const float after_maintenance_b = gpp_b - maintenance_b;
+    const float growth_resp_b = sim_max(0.0f, after_maintenance_b) * 0.16f;
+    const float positive_npp_b = sim_max(0.0f, after_maintenance_b - growth_resp_b);
+    const float production = sim_min(
+      production_potential,
+      sim_baobab_seed_production_carbon_limit(positive_npp_b, baobab_store[i], model_dt_days)
+    );
+    if (production <= 1.0e-10f) {
+      continue;
+    }
+
+    const int32_t target_start = dispersal_offsets[i];
+    const int32_t target_end = dispersal_offsets[i + 1];
+    const float weight_sum = dispersal_weight_sums[i];
+    if (weight_sum <= 0.0f || target_end <= target_start) {
+      baobab_seed_arrival[i] += production;
+      continue;
+    }
+
+    if (cohorts == 4) {
+      const float cohort_flux = production * 0.25f;
+      sim_deposit_rose_seed_cohort(size, i, target_start, target_end, weight_sum, cohort_flux, dispersal_targets, dispersal_weights, baobab_seed_arrival, &rng_state);
+      sim_deposit_rose_seed_cohort(size, i, target_start, target_end, weight_sum, cohort_flux, dispersal_targets, dispersal_weights, baobab_seed_arrival, &rng_state);
+      sim_deposit_rose_seed_cohort(size, i, target_start, target_end, weight_sum, cohort_flux, dispersal_targets, dispersal_weights, baobab_seed_arrival, &rng_state);
+      sim_deposit_rose_seed_cohort(size, i, target_start, target_end, weight_sum, cohort_flux, dispersal_targets, dispersal_weights, baobab_seed_arrival, &rng_state);
+    } else {
+      const float cohort_flux = production / (float)cohorts;
+      for (int32_t cohort = 0; cohort < cohorts; cohort += 1) {
+        sim_deposit_rose_seed_cohort(size, i, target_start, target_end, weight_sum, cohort_flux, dispersal_targets, dispersal_weights, baobab_seed_arrival, &rng_state);
+      }
+    }
+  }
+
+  params[STEP_RNG_STATE] = rng_state;
+  if (rng_state_out) {
+    *rng_state_out = rng_state;
   }
 }
 
@@ -10670,6 +10996,8 @@ static void sim_transport_darcy_core_chunk(const uint32_t *params, int32_t activ
   const float rose_seed_diffusion_m2_day = SPF(ROSE_SEED_DIFFUSION_M2_DAY);
   const int32_t transport_baobab_seed = baobab_seed_diffusion_m2_day != 0.0f;
   const int32_t transport_rose_seed = rose_seed_diffusion_m2_day != 0.0f;
+  (void)baobab_seed_diffusion_m2_day;
+  (void)transport_baobab_seed;
 
   const int32_t *SIM_RESTRICT active_ids = (const int32_t *)(uintptr_t)active_ids_offset;
   const int32_t *SIM_RESTRICT stencil = (const int32_t *)(uintptr_t)SPU(STENCIL);
@@ -10886,7 +11214,8 @@ static void sim_transport_darcy_core_chunk(const uint32_t *params, int32_t activ
 
     h_transport[i] = surface_water_diff_m2_day * lap_surface_water;
     soil_mineral_transport[i] = nutrient_diff_m2_day * lap_nutrient;
-    baobab_seed_transport[i] = transport_baobab_seed ? baobab_seed_diffusion_m2_day * lap_baobab_seed : 0.0f;
+    (void)lap_baobab_seed;
+    baobab_seed_transport[i] = 0.0f;
     rose_seed_transport[i] = transport_rose_seed ? rose_seed_diffusion_m2_day * lap_rose_seed : 0.0f;
   }
 }
@@ -10897,6 +11226,8 @@ static void sim_transport_divergence_chunk(const uint32_t *params, int32_t activ
   const float *SIM_RESTRICT gx_w = (const float *)(uintptr_t)SPU(GX);
   const float *SIM_RESTRICT gy_w = (const float *)(uintptr_t)SPU(GY);
   const float *SIM_RESTRICT h = (const float *)(uintptr_t)SPU(H);
+  const float *SIM_RESTRICT elevation = (const float *)(uintptr_t)SPU(ELEVATION);
+  const uint8_t *SIM_RESTRICT land_active = (const uint8_t *)(uintptr_t)SPU(LAND_ACTIVE_OFFSET);
   const float *SIM_RESTRICT soil_mineral_n = (const float *)(uintptr_t)SPU(SOIL_MINERAL_N);
   const float *SIM_RESTRICT surface_ux = (const float *)(uintptr_t)SPU(SURFACE_UX);
   const float *SIM_RESTRICT surface_uy = (const float *)(uintptr_t)SPU(SURFACE_UY);
@@ -10906,6 +11237,7 @@ static void sim_transport_divergence_chunk(const uint32_t *params, int32_t activ
   float *SIM_RESTRICT soil_mineral_transport = (float *)(uintptr_t)SPU(SOIL_MINERAL_TRANSPORT);
   const float surface_film_threshold_m = SPF(SURFACE_FILM_THRESHOLD_M);
   const float dt_days = SPF(MODEL_DT_DAYS);
+  const float cell_size_m = SPF(CELL_SIZE_M);
   const float nutrient_limit_scale = 0.32f / dt_days;
   const int32_t active_range = (active_ids_offset & SIM_ACTIVE_RANGE_FLAG) ? 1 : 0;
   const int32_t active_start = active_range ? (int32_t)(active_ids_offset >> 1u) : 0;
@@ -10913,8 +11245,6 @@ static void sim_transport_divergence_chunk(const uint32_t *params, int32_t activ
   for (int32_t cell_offset = 0; cell_offset < active_count; cell_offset += 1) {
     const int32_t i = active_range ? active_start + cell_offset : sim_active_cell_id(active_ids_offset, active_ids, cell_offset);
     const int32_t offset = i * SIM_RBF_STENCIL_SIZE;
-    float surface_flux_divergence_x = 0.0f;
-    float surface_flux_divergence_y = 0.0f;
     float nutrient_flux_divergence_x = 0.0f;
     float nutrient_flux_divergence_y = 0.0f;
 
@@ -10924,14 +11254,39 @@ static void sim_transport_divergence_chunk(const uint32_t *params, int32_t activ
       const int32_t cell_id = stencil[weight_index];
       const float gx_weight = gx_w[weight_index];
       const float gy_weight = gy_w[weight_index];
-      const float mobile_surface_water = sim_max(0.0f, h[cell_id] - surface_film_threshold_m);
-      surface_flux_divergence_x += gx_weight * surface_ux[cell_id] * mobile_surface_water;
-      surface_flux_divergence_y += gy_weight * surface_uy[cell_id] * mobile_surface_water;
       nutrient_flux_divergence_x += gx_weight * flux_x[cell_id];
       nutrient_flux_divergence_y += gy_weight * flux_y[cell_id];
     }
 
-    h_transport[i] -= surface_flux_divergence_x + surface_flux_divergence_y;
+    const float source_drop_sum = sim_surface_mfd_drop_sum(i, stencil, elevation, h);
+    const float source_outflow =
+      source_drop_sum > 0.0f
+        ? sim_surface_mfd_outflow_rate(h[i], surface_ux[i], surface_uy[i], cell_size_m, surface_film_threshold_m)
+        : 0.0f;
+    float surface_inflow = 0.0f;
+    SIM_UNROLL_LOOP
+    for (int32_t k = 0; k < SIM_RBF_STENCIL_SIZE; k += 1) {
+      const int32_t source = stencil[offset + k];
+      if (source == i || land_active[source] != 1u) {
+        continue;
+      }
+      const float drop_to_target = sim_surface_mfd_drop_to_target(source, i, stencil, elevation, h);
+      if (drop_to_target <= 0.0f) {
+        continue;
+      }
+      const float drop_sum = sim_surface_mfd_drop_sum(source, stencil, elevation, h);
+      if (drop_sum <= 0.0f) {
+        continue;
+      }
+      const float source_rate =
+        sim_surface_mfd_outflow_rate(h[source], surface_ux[source], surface_uy[source], cell_size_m, surface_film_threshold_m);
+      surface_inflow += source_rate * (drop_to_target / drop_sum);
+    }
+    h_transport[i] = surface_inflow - source_outflow;
+    const float max_surface_loss = sim_max(0.0f, h[i] - surface_film_threshold_m) / dt_days;
+    if (h_transport[i] < -max_surface_loss) {
+      h_transport[i] = -max_surface_loss;
+    }
     soil_mineral_transport[i] -= nutrient_flux_divergence_x + nutrient_flux_divergence_y;
     const float max_loss = sim_max(0.0f, soil_mineral_n[i] - 0.002f) * nutrient_limit_scale;
     const float max_gain = sim_max(0.0f, 1.4f - soil_mineral_n[i]) * nutrient_limit_scale;
@@ -10985,6 +11340,8 @@ static void sim_transport_darcy_core_blocks(
   const float rose_seed_diffusion_m2_day = SPF(ROSE_SEED_DIFFUSION_M2_DAY);
   const int32_t transport_baobab_seed = baobab_seed_diffusion_m2_day != 0.0f;
   const int32_t transport_rose_seed = rose_seed_diffusion_m2_day != 0.0f;
+  (void)baobab_seed_diffusion_m2_day;
+  (void)transport_baobab_seed;
 
   const int32_t *SIM_RESTRICT block_cell_offsets = (const int32_t *)(uintptr_t)SPU(TRANSPORT_BLOCK_CELL_OFFSETS);
   const uint32_t *SIM_RESTRICT block_cell_ids = (const uint32_t *)(uintptr_t)SPU(TRANSPORT_BLOCK_CELL_IDS);
@@ -11251,7 +11608,8 @@ static void sim_transport_darcy_core_blocks(
 
       h_transport[i] = surface_water_diff_m2_day * lap_surface_water;
       soil_mineral_transport[i] = nutrient_diff_m2_day * lap_nutrient;
-      baobab_seed_transport[i] = transport_baobab_seed ? baobab_seed_diffusion_m2_day * lap_baobab_seed : 0.0f;
+      (void)lap_baobab_seed;
+      baobab_seed_transport[i] = 0.0f;
       rose_seed_transport[i] = transport_rose_seed ? rose_seed_diffusion_m2_day * lap_rose_seed : 0.0f;
     }
     sim_profile_add(profile_offset, profile_stride, thread_id, SIM_PROFILE_DARCY_CORE_STENCIL, subphase_start);
@@ -11272,9 +11630,12 @@ static void sim_transport_divergence_blocks(
   const int32_t *SIM_RESTRICT block_halo_offsets = (const int32_t *)(uintptr_t)SPU(TRANSPORT_BLOCK_HALO_OFFSETS);
   const uint32_t *SIM_RESTRICT block_halo_ids = (const uint32_t *)(uintptr_t)SPU(TRANSPORT_BLOCK_HALO_IDS);
   const uint16_t *SIM_RESTRICT block_local_stencil = (const uint16_t *)(uintptr_t)SPU(TRANSPORT_BLOCK_LOCAL_STENCIL);
+  const int32_t *SIM_RESTRICT stencil = (const int32_t *)(uintptr_t)SPU(STENCIL);
   const float *SIM_RESTRICT gx_w = (const float *)(uintptr_t)SPU(GX);
   const float *SIM_RESTRICT gy_w = (const float *)(uintptr_t)SPU(GY);
   const float *SIM_RESTRICT h = (const float *)(uintptr_t)SPU(H);
+  const float *SIM_RESTRICT elevation = (const float *)(uintptr_t)SPU(ELEVATION);
+  const uint8_t *SIM_RESTRICT land_active = (const uint8_t *)(uintptr_t)SPU(LAND_ACTIVE_OFFSET);
   const float *SIM_RESTRICT soil_mineral_n = (const float *)(uintptr_t)SPU(SOIL_MINERAL_N);
   const float *SIM_RESTRICT surface_ux = (const float *)(uintptr_t)SPU(SURFACE_UX);
   const float *SIM_RESTRICT surface_uy = (const float *)(uintptr_t)SPU(SURFACE_UY);
@@ -11284,13 +11645,11 @@ static void sim_transport_divergence_blocks(
   float *SIM_RESTRICT soil_mineral_transport = (float *)(uintptr_t)SPU(SOIL_MINERAL_TRANSPORT);
   const float surface_film_threshold_m = SPF(SURFACE_FILM_THRESHOLD_M);
   const float dt_days = SPF(MODEL_DT_DAYS);
+  const float cell_size_m = SPF(CELL_SIZE_M);
   const float nutrient_limit_scale = 0.32f / dt_days;
   const int32_t scratch_stride = SPI(TRANSPORT_BLOCK_SCRATCH_STRIDE);
   float *SIM_RESTRICT scratch_base = (float *)(uintptr_t)SPU(TRANSPORT_BLOCK_SCRATCH);
   float *SIM_RESTRICT scratch = scratch_base + (int32_t)(thread_id * scratch_stride * SIM_TRANSPORT_SCRATCH_FIELDS);
-  float *SIM_RESTRICT scratch_h = sim_transport_scratch_field(scratch, scratch_stride, SIM_TRANSPORT_SCRATCH_H);
-  float *SIM_RESTRICT scratch_surface_ux = sim_transport_scratch_field(scratch, scratch_stride, SIM_TRANSPORT_SCRATCH_SURFACE_UX);
-  float *SIM_RESTRICT scratch_surface_uy = sim_transport_scratch_field(scratch, scratch_stride, SIM_TRANSPORT_SCRATCH_SURFACE_UY);
   float *SIM_RESTRICT scratch_flux_x = sim_transport_scratch_field(scratch, scratch_stride, SIM_TRANSPORT_SCRATCH_FLUX_X);
   float *SIM_RESTRICT scratch_flux_y = sim_transport_scratch_field(scratch, scratch_stride, SIM_TRANSPORT_SCRATCH_FLUX_Y);
 
@@ -11307,9 +11666,6 @@ static void sim_transport_divergence_blocks(
     SIM_VECTORIZE_LOOP
     for (int32_t hidx = 0; hidx < halo_count; hidx += 1) {
       const int32_t cell_id = block_halo_ids[halo_base + hidx];
-      scratch_h[hidx] = h[cell_id];
-      scratch_surface_ux[hidx] = surface_ux[cell_id];
-      scratch_surface_uy[hidx] = surface_uy[cell_id];
       scratch_flux_x[hidx] = flux_x[cell_id];
       scratch_flux_y[hidx] = flux_y[cell_id];
     }
@@ -11323,8 +11679,6 @@ static void sim_transport_divergence_blocks(
       const float *SIM_RESTRICT gx_ptr = gx_w + offset;
       const float *SIM_RESTRICT gy_ptr = gy_w + offset;
       const uint16_t *SIM_RESTRICT local_stencil_ptr = block_local_stencil + local_stencil_offset;
-      float surface_flux_divergence_x = 0.0f;
-      float surface_flux_divergence_y = 0.0f;
       float nutrient_flux_divergence_x = 0.0f;
       float nutrient_flux_divergence_y = 0.0f;
 
@@ -11333,14 +11687,39 @@ static void sim_transport_divergence_blocks(
         const int32_t local_index = local_stencil_ptr[k];
         const float gx_weight = gx_ptr[k];
         const float gy_weight = gy_ptr[k];
-        const float mobile_surface_water = sim_max(0.0f, scratch_h[local_index] - surface_film_threshold_m);
-        surface_flux_divergence_x += gx_weight * scratch_surface_ux[local_index] * mobile_surface_water;
-        surface_flux_divergence_y += gy_weight * scratch_surface_uy[local_index] * mobile_surface_water;
         nutrient_flux_divergence_x += gx_weight * scratch_flux_x[local_index];
         nutrient_flux_divergence_y += gy_weight * scratch_flux_y[local_index];
       }
 
-      h_transport[i] -= surface_flux_divergence_x + surface_flux_divergence_y;
+      const float source_drop_sum = sim_surface_mfd_drop_sum(i, stencil, elevation, h);
+      const float source_outflow =
+        source_drop_sum > 0.0f
+          ? sim_surface_mfd_outflow_rate(h[i], surface_ux[i], surface_uy[i], cell_size_m, surface_film_threshold_m)
+          : 0.0f;
+      float surface_inflow = 0.0f;
+      SIM_UNROLL_LOOP
+      for (int32_t k = 0; k < SIM_RBF_STENCIL_SIZE; k += 1) {
+        const int32_t source = stencil[offset + k];
+        if (source == i || land_active[source] != 1u) {
+          continue;
+        }
+        const float drop_to_target = sim_surface_mfd_drop_to_target(source, i, stencil, elevation, h);
+        if (drop_to_target <= 0.0f) {
+          continue;
+        }
+        const float drop_sum = sim_surface_mfd_drop_sum(source, stencil, elevation, h);
+        if (drop_sum <= 0.0f) {
+          continue;
+        }
+        const float source_rate =
+          sim_surface_mfd_outflow_rate(h[source], surface_ux[source], surface_uy[source], cell_size_m, surface_film_threshold_m);
+        surface_inflow += source_rate * (drop_to_target / drop_sum);
+      }
+      h_transport[i] = surface_inflow - source_outflow;
+      const float max_surface_loss = sim_max(0.0f, h[i] - surface_film_threshold_m) / dt_days;
+      if (h_transport[i] < -max_surface_loss) {
+        h_transport[i] = -max_surface_loss;
+      }
       soil_mineral_transport[i] -= nutrient_flux_divergence_x + nutrient_flux_divergence_y;
       const float max_loss = sim_max(0.0f, soil_mineral_n[i] - 0.002f) * nutrient_limit_scale;
       const float max_gain = sim_max(0.0f, 1.4f - soil_mineral_n[i]) * nutrient_limit_scale;
@@ -11655,9 +12034,9 @@ static void sim_update_canopy_environment_plant_water_fluxes_from_params(
       );
       const float rose_deeper = sim_clamp((rose_root_frac - 0.2f) / 0.26f, 0.0f, 1.0f);
       const float root_water_r = sim_weighted_root_stress4(
-        0.7f - 0.18f * rose_deeper,
-        0.22f + 0.08f * rose_deeper,
-        0.08f + 0.1f * rose_deeper,
+        0.82f - 0.1f * rose_deeper,
+        0.16f + 0.08f * rose_deeper,
+        0.02f + 0.02f * rose_deeper,
         0.0f,
         layer_stress_r0,
         layer_stress_r1,
@@ -11673,11 +12052,17 @@ static void sim_update_canopy_environment_plant_water_fluxes_from_params(
       nutrient_r = sim_nutrient_stress(soil_mineral_n[i], rose_site_nutrient);
       stress_b = sim_clamp(0.06f + 0.78f * root_water_b + 0.22f * store_norm, 0.0f, 1.0f);
       stress_r = sim_rose_water_stress_with_waterlogging(root_water_r, rose_soil, surface_water, sat0);
-      if (local_par > 0.0f && lai_total > 1.0e-9f) {
-        total_apar = local_par * cover;
-        baobab_apar = total_apar * lai_b / lai_total;
-        rose_apar = total_apar * lai_r / lai_total;
-      }
+      sim_partition_apar(
+        local_par,
+        lai_b,
+        lai_r,
+        baobab_extinction,
+        rose_extinction,
+        cover,
+        &total_apar,
+        &baobab_apar,
+        &rose_apar
+      );
       const int32_t needs_baobab_photo = baobab_apar > 0.0f && lai_b > 0.0f && stress_b > 0.0f && nutrient_b > 0.0f;
       const int32_t needs_rose_photo = rose_apar > 0.0f && lai_r > 0.0f && stress_r > 0.0f && nutrient_r > 0.0f;
       if (needs_baobab_photo || needs_rose_photo) {
@@ -11851,9 +12236,9 @@ static void sim_update_canopy_environment_plant_water_fluxes_from_params(
     brf2 = sim_max(0.0f, brf2) / brf_total;
     brf3 = sim_max(0.0f, brf3) / brf_total;
     const float rose_deeper = sim_clamp((rose_root_frac - 0.2f) / 0.26f, 0.0f, 1.0f);
-    const float rrf0 = 0.7f - 0.18f * rose_deeper;
-    const float rrf1 = 0.22f + 0.08f * rose_deeper;
-    const float rrf2 = 0.08f + 0.1f * rose_deeper;
+    const float rrf0 = 0.82f - 0.1f * rose_deeper;
+    const float rrf1 = 0.16f + 0.08f * rose_deeper;
+    const float rrf2 = 0.02f + 0.02f * rose_deeper;
     const float rrf3 = 0.0f;
 
     float b_demand =
@@ -12664,8 +13049,19 @@ static void sim_step_ecosystem_parallel_worker_impl(
       sim_profile_add(profile_offset, profile_stride, thread_id, SIM_PROFILE_SWAP_SETUP, phase_start);
 
       phase_start = sim_profile_clock(profile_offset);
+      sim_zero_baobab_seed_arrival_range_from_params(params, range_start, range_end);
       if (!SPU(ROSE_SEED_ARRIVAL_THREAD)) {
         sim_zero_rose_seed_arrival_range_from_params(params, range_start, range_end);
+      }
+      sim_thread_barrier(barrier_offset, thread_count);
+      if (sim_thread_barrier_serial_enter(barrier_offset, thread_count)) {
+        sim_produce_and_distribute_baobab_seeds_from_params(
+          params,
+          active_count,
+          active_ids_offset,
+          slow_steps_since_update > 0 ? 1.0f / (float)slow_steps_since_update : 0.0f
+        );
+        sim_thread_barrier_serial_leave(barrier_offset, thread_count);
       }
       sim_produce_rose_seeds_range_from_params(params, active_count, active_ids_offset);
       sim_profile_add(profile_offset, profile_stride, thread_id, SIM_PROFILE_ROSE_PRODUCE, phase_start);

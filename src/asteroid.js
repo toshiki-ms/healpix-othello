@@ -182,9 +182,6 @@ const EARTH_BAOBAB_HUMID_PENALTY_END_MM = 1400;
 const ROSE_PATCH_MARKER_THRESHOLD = 0.16;
 const BAOBAB_REFERENCE_HEIGHT_M = 25;
 const ROSE_REFERENCE_HEIGHT_M = 1.2;
-const MAX_HIGH_RES_EARTH_OBJECT_MARKERS = 260;
-const MAX_HIGH_RES_ASTEROID_OBJECT_MARKERS = 360;
-const MAX_MID_RES_OBJECT_MARKERS = 520;
 const ARROW_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 const ASTEROID_MAX_NSIDE = 64;
 const IS_VITE_DEV = Boolean(import.meta.env?.DEV);
@@ -5068,13 +5065,7 @@ function shouldShowLocalObjectMarkers() {
 }
 
 function objectMarkerLimit() {
-  if (topology.nside < 64) {
-    return Infinity;
-  }
-  if (topology.nside >= 128) {
-    return state.planetPreset === "earth" ? MAX_HIGH_RES_EARTH_OBJECT_MARKERS : MAX_HIGH_RES_ASTEROID_OBJECT_MARKERS;
-  }
-  return MAX_MID_RES_OBJECT_MARKERS;
+  return Infinity;
 }
 
 function objectMarkerScore(cellId) {
@@ -9966,12 +9957,12 @@ function earthLandKeyForCell(cellId, targetState = state) {
   const baobab = targetState.baobab[cellId];
   const cell = topology.cells[cellId];
 
-  if ((terrain === "rose" && flower > EARTH_ROSE_PULL_THRESHOLD) || flower > 0.12) {
-    return "earthRoseGarden";
-  }
-
   if (baobab > 0.18) {
     return "earthBaobabGrove";
+  }
+
+  if ((terrain === "rose" && flower > EARTH_ROSE_PULL_THRESHOLD) || flower > 0.12) {
+    return "earthRoseGarden";
   }
 
   if (terrain === "water") {

@@ -35,8 +35,8 @@
 
 | 用途 | 参照データ | asset / 実装 | 値・単位 |
 | --- | --- | --- | --- |
-| 海陸分布 | Natural Earth 1:110m admin_0 country polygons | `src/earth-reference.js` に埋め込んだ `nside=2,4,8,16,32,64` セル別 land fraction | 陸面率 $0$-$1$、海洋セル、海岸セル |
-| ローカル高解像度海陸 | ETOPO1 標高、極域氷の解析形 | `npm run generate:earth-land -- 128 256` で作る `src/assets/earth-land/land-nside*-u8.bin`。公開 web 版には含めない。 | 陸面 $0$ または $255$ の局所実験用 mask |
+| 海陸分布 | NOAA NGDC ETOPO1 Global Relief Model、極域氷の解析形 | `src/assets/earth-elevation/etopo1-1deg-int16.bin` を HEALPix セル中心へサンプリングし、標高 $z\ge0$ または極域氷を陸として診断する。旧埋め込み land fraction は実データ asset 欠落時の互換 fallback。 | 陸面率 $0$-$1$、海洋セル、海岸セル |
+| ローカル高解像度海陸 | ETOPO1 標高、極域氷の解析形 | `npm run generate:earth-land -- 128 256` で作る `src/assets/earth-land/land-nside*-u8.bin`。ローカル実験用。 | 陸面 $0$ または $255$ の mask |
 | 標高 | NOAA NGDC ETOPO1 Global Relief Model | `src/assets/earth-elevation/etopo1-1deg-int16.bin` | 1 度格子の標高 $z$、単位 $\mathrm{m}$ |
 | 気温 | WorldClim 2.1 BIO1 | `src/assets/earth-climate/worldclim-bio1-bio2-bio12-1deg-int16.bin` band 0 | 年平均気温、$0.1\,^\circ\mathrm{C}$ 単位 |
 | 日較差 | WorldClim 2.1 BIO2 | `src/assets/earth-climate/worldclim-bio1-bio2-bio12-1deg-int16.bin` band 1 | 平均日較差、$0.1\,^\circ\mathrm{C}$ 単位 |
@@ -212,6 +212,9 @@ $$
 - 種子散布カーネル $K^p_{ij}$ は、親セル $j$ から到着セル $i$ への分配率であり、$\sum_i K^p_{ij}=1$ を満たす。
 - 種間差は、$p_p$、成熟関数、散布距離 $\ell_p$、種子死亡率 $\mu^p_i$、発芽関数 $r^p_g$、定着後の炭素配分係数に入る。
 - 散布距離は物理長で与える。`nside` は解像度であり、惑星半径や種子散布距離そのものではない。
+- 種子散布は、現在の1回のゲーム実行では有限個の cohort を確率的に落とす。すなわち、$K^p_{ij}$ は多数回平均した期待値であり、1回の更新では各 cohort が $K^p_{\cdot j}$ に従って1つの到着セルへ落ちる。
+- このため、低解像度では種子が親セルに残る試行が多く、外へ出る場合も特定セルへまとまって入る。RBF-FD によるバイオマス拡散や連続的な期待値散布で、全近傍へ薄く同時配分する扱いにはしない。
+- バオバブとバラは同じ cohort 型確率散布を使う。成体バイオマス、種子生産、種子散布、種子バンク、発芽、定着の枠組みは共通であり、違いは各 PFT の成熟、生産、散布、死亡、発芽、炭素配分パラメータで表す。
 
 ## 現在の養分モデル
 
@@ -568,8 +571,8 @@ $$
 \begin{aligned}
 \tau_i &= k_B LAI_{B,i}+k_R LAI_{R,i},\\
 APAR_i &= PAR_i\left(1-\exp(-\tau_i)\right),\\
-APAR_{B,i} &= APAR_i\frac{LAI_{B,i}}{LAI_{B,i}+LAI_{R,i}},\\
-APAR_{R,i} &= APAR_i\frac{LAI_{R,i}}{LAI_{B,i}+LAI_{R,i}}.
+APAR_{B,i} &= APAR_i\frac{k_B LAI_{B,i}}{\tau_i},\\
+APAR_{R,i} &= APAR_i\frac{k_R LAI_{R,i}}{\tau_i}.
 \end{aligned}
 $$
 
@@ -716,21 +719,21 @@ $$
 
 $f^{repr}_p$ は花・幹など繁殖器官の成熟度、$f^{env}_{p,i}$ は水分、温度、日射、栄養、土壌、灰による繁殖制限を表す。
 
-親セル $j$ で生産されたバラ種子は、距離カーネル $K^R_{ij}$ でセル $i$ へ到着する。
+親セル $j$ で生産された種子は、種ごとの距離カーネル $K^p_{ij}$ でセル $i$ へ到着する。
 
 $$
-A^R_i=\sum_j K^R_{ij}P^{seed}_{R,j},
+A^p_i=\sum_j K^p_{ij}P^{seed}_{p,j},
 \qquad
-\sum_i K^R_{ij}=1.
+\sum_i K^p_{ij}=1.
 $$
 
 距離カーネルは、例えば次のように置ける。
 
 $$
-K^R_{ij}
+K^p_{ij}
 =
-\frac{\exp(-d_{ij}/\ell_R)}
-{\sum_{m\in\Omega_j}\exp(-d_{mj}/\ell_R)},
+\frac{\exp(-d_{ij}/\ell_p)}
+{\sum_{m\in\Omega_j}\exp(-d_{mj}/\ell_p)},
 \qquad
 \Omega_j=\{j\}\cup\mathcal{N}(j).
 $$
@@ -738,31 +741,27 @@ $$
 stochastic cohort を使う場合も同じカーネルからサンプルし、期待値として同じ保存条件を満たす。
 
 $$
-A^R_i
+A^p_i
 =
 \sum_j\sum_{\mathrm{cohort}}
-\frac{P^{seed}_{R,j}}{N_{\mathrm{cohort}}}
-X^R_{j\to i},
+\frac{P^{seed}_{p,j}}{N_{\mathrm{cohort}}}
+X^p_{j\to i},
 \qquad
-\mathbb{E}[X^R_{j\to i}]=K^R_{ij}.
+\mathbb{E}[X^p_{j\to i}]=K^p_{ij}.
 $$
 
-バオバブ種子は、現在の実装では種子バンクを RBF-FD の拡散項で輸送する。
-
-$$
-T^B_i = D_B\Delta S^B_i.
-$$
-
-バラ種子の RBF-FD 拡散係数は現在 $0$ であり、上の距離カーネル到着量を使う。種子バンクは、
+現在の実装では、バラとバオバブは同じ種子散布フレームを使う。成体が作った種子は確率的 cohort として距離カーネルで到着フラックス $A^p_i$ に入り、種子バンクは、
 
 $$
 \begin{aligned}
 (S^B_i)^{n+1}
-&= S^B_i+\Delta t\left(P^{seed}_{B,i}+T^B_i-G^B_i-\mu^B_iS^B_i\right),\\
+&= S^B_i+\Delta t\left(A^B_i-G^B_i-\mu^B_iS^B_i\right),\\
 (S^R_i)^{n+1}
 &= S^R_i+\Delta t\left(A^R_i-G^R_i-\mu^R_iS^R_i\right).
 \end{aligned}
 $$
+
+現在の公開実装では、両種とも HEALPix セル中心距離に基づく同じ隣接カーネルを使う。種間差は、種子生産率、成熟条件、貯蔵炭素制限、種子死亡率、発芽 readiness、水分・温度・日射・土壌・灰応答、定着後の炭素配分で表す。
 
 発芽・定着は、種子バンク、有効水分、温度、日射、土壌、灰、空き地で決まる。
 
@@ -975,9 +974,7 @@ $$
 $$
 \frac{d}{dt}\sum_i S^B_i
 =
-\sum_i(P^{seed}_{B,i}+T^B_i-G^B_i-\mu^B_iS^B_i),
-\qquad
-\sum_iT^B_i=0.
+\sum_i(A^B_i-G^B_i-\mu^B_iS^B_i).
 $$
 
 $$
@@ -986,7 +983,13 @@ $$
 \sum_i(A^R_i-G^R_i-\mu^R_iS^R_i).
 $$
 
-ここで $\sum_i A^R_i=\sum_i P^{seed}_{R,i}$ であることが、バラ種子散布の保存条件である。
+ここで
+
+$$
+\sum_i A^p_i=\sum_i P^{seed}_{p,i}
+$$
+
+であることが、種子散布の保存条件である。stochastic cohort 版では各実現ごとの丸め誤差を除き、cohort の質量を到着セルへ全量配ることで同じ保存条件を満たす。
 
 無機養分は単独では保存量ではない。鉱物化・有機窒素放出・風化・火山灰風化は無機養分への入力、植物吸収・リーチングは無機養分からの出力である。水平輸送だけは全球和を変えない。
 

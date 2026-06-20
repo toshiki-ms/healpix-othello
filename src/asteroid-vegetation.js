@@ -78,12 +78,15 @@ const MOLAR_VOLUME_AIR_M3_MOL = 0.02445;
 const ATMOSPHERIC_CO2_UMOL_MOL = 420;
 const ATMOSPHERIC_O2_UMOL_MOL = 210000;
 const GAS_CONSTANT_J_MOL_K = 8.314;
-const SEED_DIFF_BAOBAB_M2_DAY = 430;
+const SEED_DIFF_BAOBAB_M2_DAY = 0;
 const ROSE_SEED_DISPERSAL_LENGTH_M = SEED_DISPERSAL_REFERENCE_CELL_SIZE_M * 0.25;
+const BAOBAB_SEED_DISPERSAL_COHORTS = 4;
 const ROSE_SEED_DISPERSAL_COHORTS = 4;
+const BAOBAB_SEED_NPP_ALLOCATION_FRACTION = 0.45;
+const BAOBAB_SEED_STORE_SUPPLEMENT_FRACTION_PER_DAY = 0.32;
 const ROSE_SEED_MATURITY_C = 0.12;
 const ROSE_SEED_STORE_FRACTION_PER_DAY = 0.28;
-const ROSE_SEED_PRODUCTION_COEFF = 0.015;
+const ROSE_SEED_PRODUCTION_COEFF = 0.03;
 const ROSE_SEED_BASE_MORTALITY = 0.0035;
 const ROSE_SEED_STRESS_MORTALITY = 0.026;
 const ROSE_BACKGROUND_MORTALITY = 0.00002;
@@ -345,7 +348,7 @@ const ROSE_CARBON_TRAITS = Object.freeze({
   flowerMaintenance: 0.00082,
   rootMaintenance: 0.00028,
   storageMaintenance: 0.00008,
-  seedEstablishment: 0.45,
+  seedEstablishment: 0.9,
   leafTurnover: dailyTurnoverFromMeanLifetime(ROSE_LEAF_MEAN_LIFETIME_DAYS),
   flowerTurnover: dailyTurnoverFromMeanLifetime(ROSE_BLOOM_COHORT_MEAN_LIFETIME_DAYS),
   rootTurnover: dailyTurnoverFromMeanLifetime(ROSE_FINE_ROOT_MEAN_LIFETIME_DAYS)
@@ -926,13 +929,14 @@ function initialize(model, initial) {
         terrainType === "rock" ||
         terrainType === "volcano";
       const localMoisture = moisture?.[id] ?? 0.4;
+      const roseSuitability = clamp(initialRose / 0.55);
       const earthRoseFertility = unsuitableRoseGround
         ? 0.08
         : clamp(
-          0.34 +
+          0.14 +
             initialRose * 2.16 +
-            (terrainType === "moss" || terrainType === "meadow" ? 0.34 : 0) +
-            Math.max(0, localMoisture - 0.34) * 0.48 -
+            (terrainType === "moss" || terrainType === "meadow" ? 0.26 * roseSuitability : 0) +
+            Math.max(0, localMoisture - 0.34) * 0.32 * roseSuitability -
             (terrainType === "sand" ? 0.2 : 0) +
             (isRoseGarden ? 0.5 : 0),
           0.1,
@@ -1810,19 +1814,18 @@ function refreshFastDiagnostics(model) {
       0,
       rosePft.maxLai
     );
-    const laiTotal = laiB + laiR;
     const opticalDepthB = baobabPft.photosynthesis.extinction * laiB;
     const opticalDepthR = rosePft.photosynthesis.extinction * laiR;
     const opticalDepthTotal = opticalDepthB + opticalDepthR;
-    const aparTotal = state.par[i] > 0 && laiTotal > 1e-9 ? state.par[i] * (1 - Math.exp(-opticalDepthTotal)) : 0;
+    const apar = partitionAparInto(aparScratch, state.par[i], laiB, laiR);
     state.laiBaobab[i] = laiB;
     state.laiRose[i] = laiR;
     state.coverBaobab[i] = clamp(1 - Math.exp(-opticalDepthB));
     state.coverRose[i] = clamp(1 - Math.exp(-opticalDepthR));
     state.vegetationCover[i] = clamp(1 - Math.exp(-opticalDepthTotal));
-    state.aparTotal[i] = aparTotal;
-    state.aparBaobab[i] = laiTotal > 1e-9 ? aparTotal * laiB / laiTotal : 0;
-    state.aparRose[i] = laiTotal > 1e-9 ? aparTotal * laiR / laiTotal : 0;
+    state.aparTotal[i] = apar.total;
+    state.aparBaobab[i] = apar.baobab;
+    state.aparRose[i] = apar.rose;
 
     const sub = SUBSTRATES[state.substrate[i]];
     const roseSoil = state.roseFertility[i];
@@ -2094,6 +2097,10 @@ function computeStableSurfaceWaterTransport(model, dtDays = MODEL_DT_DAYS) {
     computeSurfaceWaterTransportRbf(model, state.Hn, state.Htransport);
     for (let cellOffset = 0; cellOffset < cellCount; cellOffset += 1) {
       const i = activeCellIds ? activeCellIds[cellOffset] : cellOffset;
+      const maxSurfaceLoss = Math.max(0, state.Hn[i] - SURFACE_FILM_THRESHOLD_M) / subDt;
+      if (state.Htransport[i] < -maxSurfaceLoss) {
+        state.Htransport[i] = -maxSurfaceLoss;
+      }
       const next = state.Hn[i] + subDt * state.Htransport[i];
       if (!Number.isFinite(next)) {
         throw new Error(`Surface water transport diverged at cell ${i}.`);
@@ -2867,7 +2874,7 @@ function transportDarcyWaterColumnsRbf(
 
     Htransport[i] = SURFACE_WATER_DIFF_M2_DAY * lapSurfaceWater;
     soilMineralTransport[i] = NUTRIENT_DIFF_M2_DAY * lapNutrient;
-    baobabSeedTransport[i] = baobabSeedDiffusionM2Day * lapBaobabSeed;
+    baobabSeedTransport[i] = 0;
     roseSeedTransport[i] = roseSeedDiffusionM2Day * lapRoseSeed;
   }
   return false;
@@ -3184,6 +3191,78 @@ function distributeRoseSeedProduction(model) {
   }
 
   throw new Error("WASM rose seed production and dispersal kernel is required.");
+}
+
+function depositSeedCohorts(size, sourceCell, production, kernel, arrival, rng, cohorts) {
+  const start = kernel.offsets[sourceCell];
+  const end = kernel.offsets[sourceCell + 1];
+  const weightSum = kernel.weightSums[sourceCell];
+  if (weightSum <= 0 || end <= start) {
+    arrival[sourceCell] += production;
+    return;
+  }
+
+  const cohortFlux = production / cohorts;
+  const cumulativeWeights = kernel.cumulativeWeights ?? kernel.weights;
+  for (let cohort = 0; cohort < cohorts; cohort += 1) {
+    const draw = rng() * weightSum;
+    let low = start;
+    let high = end;
+    while (low < high) {
+      const mid = low + ((high - low) >> 1);
+      if (draw <= cumulativeWeights[mid]) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    const target = low >= start && low < end ? kernel.targets[low] : sourceCell;
+    if (target >= 0 && target < size) {
+      arrival[target] += cohortFlux;
+    }
+  }
+}
+
+function distributeBaobabSeedProduction(model) {
+  const { state, size, roseSeedDispersalKernel } = model;
+  state.baobabSeedTransport.fill(0);
+  if (!roseSeedDispersalKernel) {
+    throw new Error("Seed dispersal kernel is required.");
+  }
+  const rng = model.rng ?? mulberry32(7331 + model.topology.nside * 1009);
+  const cohorts = Math.max(1, BAOBAB_SEED_DISPERSAL_COHORTS);
+  for (let i = 0; i < size; i += 1) {
+    if (state.baobabBlocked[i]) {
+      continue;
+    }
+    const adultCarbon = state.baobabLeaf[i] + state.baobabStem[i] + state.baobabRoot[i];
+    if (adultCarbon <= 1e-8) {
+      continue;
+    }
+    const stress = clamp(state.rootStressBaobab[i]);
+    const tempStress = temperatureResponse(state.surfaceTempC[i], 31, 7, 46);
+    const potential = baobabSeedProduction(state.baobabStem[i], state.baobabLeaf[i], stress, tempStress);
+    const ashLoad = clamp((state.ashStress[i] ?? 0) * 1.8);
+    const gpp = Math.max(0, state.gppBaobab[i]) * Math.max(0, 1 - 0.82 * ashLoad);
+    const maintenance = maintenanceRespiration(
+      BAOBAB_CARBON_TRAITS,
+      {
+        leaf: state.baobabLeaf[i],
+        stem: state.baobabStem[i],
+        root: state.baobabRoot[i],
+        storage: state.baobabStore[i]
+      },
+      state.surfaceTempC[i]
+    );
+    const budget = carbonProductionBudget(gpp, maintenance, BAOBAB_CARBON_TRAITS);
+    const production = Math.min(
+      potential,
+      baobabSeedProductionCarbonLimit(budget.npp, state.baobabStore[i], MODEL_DT_DAYS)
+    );
+    if (production > 1e-10) {
+      depositSeedCohorts(size, i, production, roseSeedDispersalKernel, state.baobabSeedTransport, rng, cohorts);
+    }
+  }
 }
 
 function limitSoilTransport(model, layer, dtDays = MODEL_DT_DAYS) {
@@ -3717,20 +3796,19 @@ function pftCoverFromLai(pftKey, lai) {
 function partitionAparInto(out, par, laiB, laiR) {
   const baobabLaiValue = Math.max(0, laiB);
   const roseLaiValue = Math.max(0, laiR);
-  const laiTotal = baobabLaiValue + roseLaiValue;
-  if (par <= 0 || laiTotal <= 1e-9) {
+  const opticalDepthB = PFT_TRAITS.baobab.photosynthesis.extinction * baobabLaiValue;
+  const opticalDepthR = PFT_TRAITS.rose.photosynthesis.extinction * roseLaiValue;
+  const opticalDepthTotal = opticalDepthB + opticalDepthR;
+  if (par <= 0 || opticalDepthTotal <= 1e-9) {
     out.total = 0;
     out.baobab = 0;
     out.rose = 0;
     return out;
   }
-  const opticalDepthTotal =
-    PFT_TRAITS.baobab.photosynthesis.extinction * baobabLaiValue +
-    PFT_TRAITS.rose.photosynthesis.extinction * roseLaiValue;
   const total = par * (1 - Math.exp(-opticalDepthTotal));
   out.total = total;
-  out.baobab = total * baobabLaiValue / laiTotal;
-  out.rose = total * roseLaiValue / laiTotal;
+  out.baobab = total * opticalDepthB / opticalDepthTotal;
+  out.rose = total * opticalDepthR / opticalDepthTotal;
   return out;
 }
 
@@ -3929,9 +4007,9 @@ function baobabRootLayerFractions(rootDepthParam, rootFraction, out = [0, 0, 0, 
 
 function roseRootLayerFractions(rootFraction, out = [0, 0, 0, 0]) {
   const deeper = clamp((rootFraction - 0.2) / 0.26);
-  out[0] = 0.7 - 0.18 * deeper;
-  out[1] = 0.22 + 0.08 * deeper;
-  out[2] = 0.08 + 0.1 * deeper;
+  out[0] = 0.82 - 0.1 * deeper;
+  out[1] = 0.16 + 0.08 * deeper;
+  out[2] = 0.02 + 0.02 * deeper;
   out[3] = 0;
   return normalizeWeights(out);
 }
@@ -4766,18 +4844,10 @@ function prepareInitialPhotosynthesisInputs(model) {
     const stressR = roseWaterStressWithAeration(roseRootWater, roseSoil, surfaceWater, s0);
     const laiB = state.laiBaobab[i];
     const laiR = state.laiRose[i];
-    const laiTotal = laiB + laiR;
-    let aparTotal = 0;
-    let aparBaobab = 0;
-    let aparRose = 0;
-    if (state.par[i] > 0 && laiTotal > 1e-9) {
-      aparTotal = state.par[i] * state.vegetationCover[i];
-      aparBaobab = aparTotal * laiB / laiTotal;
-      aparRose = aparTotal * laiR / laiTotal;
-    }
-    state.aparTotal[i] = aparTotal;
-    state.aparBaobab[i] = aparBaobab;
-    state.aparRose[i] = aparRose;
+    const apar = partitionAparInto(aparScratch, state.par[i], laiB, laiR);
+    state.aparTotal[i] = apar.total;
+    state.aparBaobab[i] = apar.baobab;
+    state.aparRose[i] = apar.rose;
     state.photoWaterStressBaobab[i] = stressB;
     state.photoWaterStressRose[i] = stressR;
     state.photoNutrientBaobab[i] = nutrientB;
@@ -4785,18 +4855,24 @@ function prepareInitialPhotosynthesisInputs(model) {
   }
 }
 
-function roseRootAerationFactor(surfaceWater, topSaturation) {
-  const airFilledPore = clamp(1 - topSaturation);
-  const airFactor = clamp((airFilledPore - 0.04) / 0.08);
+function roseRootAerationFactor(surfaceWater, topSaturation, roseSoil) {
+  const drainage = clamp((roseSoil - 0.45) / 1.15);
+  const effectiveSaturation = clamp(topSaturation - 0.12 * drainage);
+  const airFilledPore = clamp(1 - effectiveSaturation);
+  const minAirFilledPore = 0.025 + 0.035 * drainage;
+  const aerationRange = 0.1 + 0.08 * drainage;
+  const airFactor = clamp((airFilledPore - minAirFilledPore) / aerationRange);
   const gasDiffusionFactor = airFactor * airFactor * (3 - 2 * airFactor);
-  const surfaceFilmFactor = 1 / (1 + Math.max(0, surfaceWater) / 0.0035);
+  const surfaceFilmFactor = 1 / (1 + Math.max(0, surfaceWater) / (0.0035 + 0.0035 * drainage));
   return clamp(gasDiffusionFactor * surfaceFilmFactor);
 }
 
 function roseWaterStressWithAeration(rootWater, roseSoil, surfaceWater, topSaturation) {
   const pondSupport = clamp(surfaceWater * 10);
   const baseStress = clamp(rootWater * (0.84 + roseSoil * 0.1) + 0.1 * pondSupport - 0.015);
-  const oxygenFactor = 0.18 + 0.82 * roseRootAerationFactor(surfaceWater, topSaturation);
+  const drainage = clamp((roseSoil - 0.45) / 1.15);
+  const oxygenFloor = 0.18 + 0.22 * drainage;
+  const oxygenFactor = oxygenFloor + (1 - oxygenFloor) * roseRootAerationFactor(surfaceWater, topSaturation, roseSoil);
   return clamp(baseStress * oxygenFactor);
 }
 
@@ -4878,8 +4954,16 @@ function canopyInterceptionFluxInto(out, state, i, rain, laiTotal, et0) {
 }
 
 function baobabSeedProduction(stemCarbon, leafCarbon, stress, tempStress) {
-  const maturity = clamp((stemCarbon - 0.08) / 0.55);
-  return 0.0048 * maturity * (0.35 + 0.65 * stress) * (0.25 + 0.75 * tempStress) * (0.45 + leafCarbon);
+  const maturity = smoothstep(clamp((stemCarbon - 0.045) / 0.28));
+  return 0.0085 * maturity * (0.35 + 0.65 * stress) * (0.25 + 0.75 * tempStress) * (0.45 + leafCarbon);
+}
+
+function baobabSeedProductionCarbonLimit(positiveNpp, storeCarbon, dtDays = MODEL_DT_DAYS) {
+  const safeDtDays = Math.max(1e-6, dtDays);
+  return (
+    Math.max(0, positiveNpp) * BAOBAB_SEED_NPP_ALLOCATION_FRACTION +
+    Math.max(0, storeCarbon) * BAOBAB_SEED_STORE_SUPPLEMENT_FRACTION_PER_DAY / safeDtDays
+  );
 }
 
 function roseSeedProduction(adultCarbon, flowerCarbon, stress, tempStress, roseSoil, light) {
@@ -4957,19 +5041,37 @@ function baobabGerminationRate(state, i, wetness, tempStress, light, substrateIn
   }
   const wetPenalty = 1 - 0.92 * clamp((wetness - 0.64) / 0.28);
   const dryPulse = clamp((wetness - 0.18) / 0.34) * Math.max(0.04, wetPenalty);
-  const risk = clamp(0.25 + state.baobabRisk[i] * 0.95);
+  const habitatRecruitment = smoothstep((state.baobabRisk[i] - 0.18) / 0.56);
   const ashPenalty = 1 - clamp(state.ashStress[i] * 1.4) * 0.86;
   const substrateFactor = SUBSTRATE_BAOBAB_GERMINATION_FACTOR[substrateIndex] || 1;
   const readinessFactor = clamp((readiness - 0.08) / 0.58);
-  return 0.11 * readinessFactor * dryPulse * tempStress * clamp(0.25 + 0.75 * light) * risk * Math.max(0.08, ashPenalty) * substrateFactor;
+  return 0.11 * readinessFactor * dryPulse * tempStress * clamp(0.25 + 0.75 * light) *
+    habitatRecruitment * Math.max(0.08, ashPenalty) * substrateFactor;
+}
+
+function roseRecruitmentClimateFactor(wetness, tempStress, light) {
+  const moistureLower = clamp((wetness - 0.26) / 0.34);
+  const waterloggingPenalty = 1 - 0.78 * clamp((wetness - 0.82) / 0.16);
+  const moistureWindow = Math.max(0, moistureLower * waterloggingPenalty);
+  const temperatureWindow = smoothstep((tempStress - 0.28) / 0.48);
+  const lightWindow = smoothstep((light - 0.14) / 0.42);
+  return clamp(moistureWindow * temperatureWindow * lightWindow);
+}
+
+function roseSeedlingEstablishmentFactor(wetness, tempStress, light, roseSoil) {
+  const climate = roseRecruitmentClimateFactor(wetness, tempStress, light);
+  const soil = smoothstep((clamp(roseSoil / 1.6) - 0.18) / 0.5);
+  return clamp(climate * soil);
 }
 
 function roseGerminationRate(state, i, wetness, tempStress, light, ashLoad, readiness, openFraction) {
-  const moisture = clamp((wetness - 0.28) / 0.42);
+  const climate = roseRecruitmentClimateFactor(wetness, tempStress, light);
   const fertility = clamp(state.roseFertility[i] / 1.6);
+  const fertilityBarrier = smoothstep((fertility - 0.18) / 0.5);
   const ashPenalty = 1 - clamp(ashLoad * 0.8);
-  const readinessFactor = clamp((readiness - 0.12) / 0.58);
-  return 0.24 * readinessFactor * moisture * tempStress * clamp(0.35 + 0.65 * light) * fertility * ashPenalty * clamp(openFraction);
+  const readinessFactor = clamp((readiness - 0.08) / 0.52);
+  return 3.0 * readinessFactor * climate *
+    fertility * fertilityBarrier * ashPenalty * clamp(openFraction);
 }
 
 function nutrientStress(mineralN, substrateFactor) {
@@ -5174,6 +5276,8 @@ function updateRoseCarbonPoolsInto(
   seedOutput,
   stress,
   light,
+  tempStress,
+  wetness,
   roseSoil,
   ashLoad,
   storeCap,
@@ -5212,7 +5316,9 @@ function updateRoseCarbonPoolsInto(
     state.roseAllocRootC[i] = vegetativeNpp * allocRoot;
     state.roseAllocStoreC[i] = vegetativeNpp * allocStore;
   }
-  const siteEstablishment = clamp(0.72 + 2.65 * clamp((roseSoil - 0.42) / 1.12), 0.72, 3.15);
+  const siteSuitability = smoothstep((clamp(roseSoil / 1.6) - 0.18) / 0.5);
+  const seedlingClimate = roseSeedlingEstablishmentFactor(wetness, tempStress, light, roseSoil);
+  const siteEstablishment = clamp(0.08 + 160 * siteSuitability * seedlingClimate, 0.08, 160);
   const seedEstablishment = Math.max(0, seedInput) * traits.seedEstablishment * siteEstablishment;
   const establishmentFlowerShare = clamp((roseSoil - 0.72) / 0.74) * 0.18 * clamp(stress);
   const drought = 1 - clamp(stress);
@@ -5455,7 +5561,7 @@ function step(model, options = {}) {
       state[key]?.fill(0);
     }
   }
-  const baobabSeedDiffusionM2Day = SEED_DIFF_BAOBAB_M2_DAY * params.baobabSpread;
+  const baobabSeedDiffusionM2Day = SEED_DIFF_BAOBAB_M2_DAY;
   const roseSeedDiffusionM2Day = 0;
   const rainScale = clamp(params.rainScale, 5, 40);
   const rainPatchiness = clamp(params.rainPatchiness);
@@ -5626,10 +5732,11 @@ function step(model, options = {}) {
       profileSectionStart = now;
     }
   }
+  distributeBaobabSeedProduction(model);
   distributeRoseSeedProduction(model);
   if (profileSink) {
     const now = performance.now();
-    addProfileTime(profileSink, "roseSeedProductionDistribution", now - profileSectionStart);
+    addProfileTime(profileSink, "seedProductionDistribution", now - profileSectionStart);
     profileSectionStart = now;
   }
   let usedPlantCarbonSeedBatch = false;
@@ -5795,10 +5902,11 @@ function step(model, options = {}) {
     let aparTotal = usedInitialPhotosynthesisBatch ? state.aparTotal[i] : 0;
     let aparBaobab = usedInitialPhotosynthesisBatch ? state.aparBaobab[i] : 0;
     let aparRose = usedInitialPhotosynthesisBatch ? state.aparRose[i] : 0;
-    if (!usedInitialPhotosynthesisBatch && par > 0 && laiTotal > 1e-9) {
-      aparTotal = par * cover;
-      aparBaobab = aparTotal * laiB / laiTotal;
-      aparRose = aparTotal * laiR / laiTotal;
+    if (!usedInitialPhotosynthesisBatch) {
+      const apar = partitionAparInto(aparScratch, par, laiB, laiR);
+      aparTotal = apar.total;
+      aparBaobab = apar.baobab;
+      aparRose = apar.rose;
       state.aparTotal[i] = aparTotal;
       state.aparBaobab[i] = aparBaobab;
       state.aparRose[i] = aparRose;
@@ -6217,7 +6325,10 @@ function step(model, options = {}) {
     const roseMortality = roseStressMortality(stressR, canopyLightRStress, sub, ashLoad);
 
     const baobabSeedProdPotential = baobabBlocked[i] ? 0 : baobabSeedProduction(baobabStem[i], baobabLeaf[i], stressB, baobabTempStress);
-    const baobabSeedProd = Math.min(baobabSeedProdPotential, Math.max(0, baobabStore[i]) * 0.32 / MODEL_DT_DAYS);
+    const baobabSeedProd = Math.min(
+      baobabSeedProdPotential,
+      baobabSeedProductionCarbonLimit(nppB, baobabStore[i], MODEL_DT_DAYS)
+    );
     const roseSeedProd = roseSeedProductionRate[i];
     const roseSeedInput = roseSeedArrival[i];
     const nextBaobabReadiness = baobabBlocked[i]
@@ -6226,7 +6337,8 @@ function step(model, options = {}) {
     const nextRoseReadiness = updateSeedReadiness(roseGerminationReadiness[i], wetness, tempC, "rose");
     baobabGerminationReadinessN[i] = nextBaobabReadiness;
     roseGerminationReadinessN[i] = nextRoseReadiness;
-    const effectiveBaobabSeedPool = baobabSeed[i] + baobabSeedProd * MODEL_DT_DAYS * 0.18;
+    const baobabSeedInput = baobabSeedTransport[i];
+    const effectiveBaobabSeedPool = baobabSeed[i] + baobabSeedInput * MODEL_DT_DAYS;
     const effectiveRoseSeedPool = roseSeed[i] + roseSeedInput * MODEL_DT_DAYS;
     const openFraction = Math.max(0, 1 - cover);
     const baobabGerminationFlux = effectiveBaobabSeedPool * baobabGerminationRate(state, i, wetness, baobabTempStress, lightBStress, substrateIndex, nextBaobabReadiness);
@@ -6235,7 +6347,7 @@ function step(model, options = {}) {
       (seedMortalityRate(wetness, tempC, 0.0022, 0.014) + 0.035 * clamp((wetness - 0.68) / 0.24)) *
       baobabSeed[i];
     const roseSeedDeath = seedMortalityRate(wetness, tempC, ROSE_SEED_BASE_MORTALITY, ROSE_SEED_STRESS_MORTALITY) * roseSeed[i];
-    const seedB = baobabBlocked[i] ? 0 : Math.min(baobabSeed[i] / MODEL_DT_DAYS + baobabSeedProd, baobabGerminationFlux);
+    const seedB = baobabBlocked[i] ? 0 : Math.min(baobabSeed[i] / MODEL_DT_DAYS + baobabSeedInput, baobabGerminationFlux);
     const seedFromRoseBank = Math.min(roseSeed[i] / MODEL_DT_DAYS + roseSeedInput, roseGerminationFlux);
     const seedR = seedFromRoseBank;
     if (writeDiagnostics) {
@@ -6243,7 +6355,7 @@ function step(model, options = {}) {
       state.roseGermination[i] = seedR;
     }
     baobabSeedN[i] = baobabBlocked[i] ? 0 : clamp(
-      baobabSeed[i] + MODEL_DT_DAYS * (baobabSeedTransport[i] + baobabSeedProd - seedB - baobabSeedDeath),
+      baobabSeed[i] + MODEL_DT_DAYS * (baobabSeedInput - seedB - baobabSeedDeath),
       0,
       0.7
     );
@@ -6276,6 +6388,8 @@ function step(model, options = {}) {
       roseSeedProd,
       stressR,
       canopyLightRStress,
+      roseTempStress,
+      wetness,
       roseSoil,
       ashLoad,
       roseStoreCapacity(roseRoot[i], roseLeaf[i]),
@@ -6386,7 +6500,7 @@ function step(model, options = {}) {
         (autotrophicRespirationB + autotrophicRespirationR + state.soilCarbonRespiration[i]) *
         MODEL_DT_DAYS;
       const carbonTransport =
-        (baobabSeedTransport[i] + roseSeedTransport[i] + roseSeedInput - roseSeedProd) *
+        (baobabSeedTransport[i] + roseSeedTransport[i] + roseSeedInput - baobabSeedProd - roseSeedProd) *
         MODEL_DT_DAYS;
       const plantCarbonAfter =
         baobabLeafN[i] +
@@ -8418,6 +8532,11 @@ function harmonicMean(a, b) {
 
 function clamp(value, lower = 0, upper = 1) {
   return Math.max(lower, Math.min(upper, value));
+}
+
+function smoothstep(value) {
+  const x = clamp(value);
+  return x * x * (3 - 2 * x);
 }
 
 function dot3(a, b) {
